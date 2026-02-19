@@ -110,3 +110,88 @@ engram import --source claude-mem
 ```
 
 **Build alongside:** Memgraph integration.
+
+---
+
+## Research: Smart Memory Techniques
+
+*Inspired by Noodlbox's architecture and Factory.ai's research on agent memory.*
+
+### 1. Relevance-Gated Context Injection
+
+**Problem:** Current compression (CLAUDE.md, session summaries) is all-or-nothing — the full summary gets injected regardless of whether it's relevant to the current turn.
+
+**Approach:** Before injecting compressed memory, score it against the current query using FTS5 or embeddings. Only inject the fragments that are semantically relevant.
+
+**Example:** If the user asks about "deposit webhooks", don't inject memories about KYB fixes or escrow testing. Only inject the deposit-related observations.
+
+**Implementation:**
+1. Compress session history into tagged fragments (not one big blob)
+2. At injection time, run `engram search` against the current user message
+3. Inject top-K relevant fragments as system context
+4. Track which fragments get used (do they reduce errors? do they save exploration?)
+
+**Buildability:** Medium. FTS5 already does the relevance scoring. The hard part is integrating with Claude Code's context injection pipeline (hooks or CLAUDE.md generation).
+
+---
+
+### 2. Cluster-Based Memory Structure
+
+**Problem:** Session summaries are chronological — "first we did X, then Y, then Z." But knowledge is topical — "everything about the auth module" spans 15 sessions over 3 weeks.
+
+**Approach:** Group observations by semantic cluster rather than by session timeline. Similar to how Noodlbox groups code by functional communities, group memories by topic.
+
+**Implementation:**
+1. Extract key observations from each session (decisions, errors, patterns)
+2. Cluster observations using embeddings (e.g. "auth" cluster, "deposit flow" cluster, "deployment" cluster)
+3. Compress per-cluster rather than per-session
+4. Result: `engram recall --topic auth` returns a coherent summary of all auth-related decisions across all sessions
+
+**Research basis:** Factory.ai shows structured summaries significantly outperform naive truncation on agent continuation tasks.
+
+**Buildability:** Medium-high. Requires embeddings (ChromaDB or local model). The clustering is the research-heavy part.
+
+---
+
+### 3. Impact-Aware Compression
+
+**Problem:** Not all context is equal. Some past decisions are load-bearing for current reasoning ("we chose JWT over sessions because X"), others are historical noise ("we ran 15 grep commands looking for a file").
+
+**Approach:** Track which past context actually influences future decisions vs. which is safely forgettable. Compress aggressively on noise, preserve signal.
+
+**Signals for load-bearing context:**
+- Decisions that get referenced later ("as we decided earlier...")
+- Error→fix pairs (the fix is valuable, the debugging chain is not)
+- Architecture choices that constrain future work
+- Configuration values and environment specifics
+
+**Signals for noise:**
+- File exploration chains (Glob→Read→Grep→Read loops)
+- Failed attempts that were abandoned
+- Verbose tool output (full file contents, long command output)
+
+**Implementation:**
+1. Tag messages at index time: `exploration`, `decision`, `error`, `fix`, `output`
+2. Compress differently per tag: decisions get full preservation, exploration gets 1-line summary
+3. Natural breakpoints for compression: tool result boundaries, user turn boundaries
+
+**Buildability:** High — this is the most immediately actionable one. The tagging can be rule-based (tool_name patterns) without needing ML.
+
+---
+
+### 4. Pre-Analyzed Context Bundles
+
+**Problem:** Every new session re-discovers the same project structure. The first 10-20 messages of every session are "read the config, understand the layout, find the entry point" — pure waste.
+
+**Approach:** Ship pre-built project profiles that give the agent a head start. Like Noodlbox shipping pre-indexed context for popular packages.
+
+**Two levels:**
+1. **Per-project bundles** — Engram analyzes your past sessions for a project and generates a compact "project brief" that can be injected into CLAUDE.md:
+   ```
+   engram brief --project monra > CLAUDE.md
+   ```
+   Output: key files, architecture overview, common patterns, known gotchas — all extracted from session history.
+
+2. **Community bundles** — Pre-built profiles for common stacks (Next.js + Prisma, FastAPI + SQLAlchemy, etc.) that encode typical tool patterns and cost profiles.
+
+**Buildability:** Level 1 is very buildable — it's essentially `engram search` + summarization. Level 2 needs community/marketplace infrastructure.
