@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "engram"
+version = "0.1.0"
+description = "Knowledge base for Claude Code sessions — index, search, and monitor your AI agent sessions"
+requires-python = ">=3.10"
+license = "MIT"
+
+[project.scripts]
+engram = "engram.cli:main"
