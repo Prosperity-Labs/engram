@@ -134,14 +134,85 @@ For non-dev contexts (fintech flows, accounting, construction bids), the analogo
 
 ---
 
+## Key Architectural Insight: Two-Layer Persistence
+
+**Factory's ceiling of 2.45/5 on artifact tracking is a category error, not a quality problem.** They're asking an LLM to remember what files it touched by including it in a freeform summary. That's inherently lossy — artifacts compete with everything else in the context for attention, and get re-summarized repeatedly across compression cycles.
+
+**The solution: don't summarize artifacts at all.** Pull them out of the summarization problem entirely.
+
+### The Two-Layer Architecture
+
+| Layer | What it holds | How it persists | Needs LLM? |
+|-------|--------------|-----------------|------------|
+| **Artifact manifest** | What happened — files, commands, APIs, errors | Deterministic extraction from tool_use blocks, accumulated verbatim, never summarized | No |
+| **Decision log** | Why it happened — choices, rationale, constraints | Structured compression with dedicated sections | Yes |
+
+**Why two layers:**
+- **Artifacts** (files touched, commands run, APIs called) are deterministic facts extractable from tool_use blocks. A manifest that accumulates and persists verbatim is strictly better than asking an LLM to remember them in prose.
+- **Decisions** (why we chose JWT, why we refactored the handler) live in conversation prose, not in tool calls. The "why" still needs structured compression because no deterministic extraction captures reasoning.
+
+**The key benefit:** The conversation itself becomes aggressively compressible because the two most important things are preserved separately. You're not asking one summary to carry both "which files did we touch" AND "why did we choose this approach" — each has its own persistence mechanism optimized for its nature.
+
+**This is architecturally cleaner than Factory's approach.** They attempt everything in one structured summary. Engram splits the problem: deterministic tracking for facts, structured compression only for reasoning. Each layer uses the right tool for the job.
+
+### Artifact Manifest Design
+
+The manifest is a deterministic sidecar — extracted from tool_use blocks at index time, accumulated per session, preserved verbatim through compression events.
+
+```
+Session: 82b957bc (monra-app)
+Duration: 2h 14m | Messages: 302
+
+FILES MODIFIED (12):
+  monra-core/flow-service/src/handlers/claim-link-transfer.ts  [Edit x3]
+  monra-core/web3-service/src/lib/utils/constants.ts           [Edit x1]
+  monra-core/flow-service/src/listeners/webhook-processor.ts   [Edit x2]
+  ...
+
+FILES READ (42):
+  monra-lib/src/lib/clients/database/types.ts                  [Read x4]
+  ...
+
+COMMANDS (58):
+  docker logs flow-service --tail 50                           [x12]
+  git diff --cached                                            [x3]
+  curl -X POST localhost:3001/api/...                          [x5]
+  ...
+
+ERRORS (6):
+  "Insufficient balance" → RESOLVED: added balance check before claim
+  "CDK no changes detected" → RESOLVED: cleared .cdk.staging cache
+  ...
+
+DECISIONS (extracted from decision log):
+  - Chose event-driven claim over polling (latency requirement)
+  - Added escrow detection to Alchemy webhook (prevent double-credit)
+  ...
+```
+
+When compression triggers, this manifest gets injected verbatim alongside the compressed conversation. The agent always knows exactly what it touched — no LLM recall required.
+
+### Highest-Signal Starting Point
+
+**File paths only.** This is the most common failure mode in coding agents (Factory's artifact probe specifically tests "which files did we modify and what changed"). It's easy to detect from tool call traces, and delivering even 4/5 on that dimension would immediately beat every existing solution.
+
+Expansion path:
+1. File paths modified/read (day 1)
+2. Commands executed (day 2)
+3. API endpoints called (week 1)
+4. Error→resolution pairs (week 2)
+5. Decision extraction from text blocks (needs LLM, week 3+)
+
+---
+
 ## Benchmark Target
 
 Factory.ai's scores provide a concrete benchmark:
 
-| Metric | Factory (SOTA) | Engram Target |
-|--------|---------------|---------------|
-| Overall quality | 3.70/5 | 3.80+ |
-| Accuracy | 4.04/5 | 4.10+ |
-| Artifact trail | 2.45/5 | **3.50+** |
+| Metric | Factory (SOTA) | Engram Target | Approach |
+|--------|---------------|---------------|----------|
+| Overall quality | 3.70/5 | 3.80+ | Two-layer architecture |
+| Accuracy | 4.04/5 | 4.10+ | Structured decision log |
+| Artifact trail | 2.45/5 | **4.50+** | Deterministic manifest (bypass summarization) |
 
-The artifact trail is where we can leapfrog — because we have the raw tool_use data that no one else is indexing.
+The artifact trail target is aggressive (4.50 vs Factory's 2.45) because we're not trying to summarize better — we're maintaining a deterministic record. The ceiling is much higher when you're not relying on an LLM to remember facts.
