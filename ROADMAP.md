@@ -22,6 +22,74 @@
 
 ## Future Features
 
+### Artifact Trail Index (high priority — unsolved industry problem)
+
+Maintain a separate artifact index that survives compression. Factory.ai's benchmark shows artifact tracking scores 2.45/5 even for SOTA — this is the gap Engram can fill.
+
+**What it tracks:**
+- Files read/written/created (extracted from Read, Edit, Write, Glob tool calls)
+- Commands executed (Bash tool calls)
+- API calls made (MCP tools, curl commands)
+- Errors encountered and their resolution status
+
+**Schema:**
+```sql
+CREATE TABLE artifacts (
+    session_id    TEXT,
+    artifact_type TEXT,   -- file_read, file_write, file_create, command, api_call, error
+    target        TEXT,   -- file path, command, endpoint
+    sequence      INTEGER,
+    context       TEXT    -- surrounding decision/error context
+);
+```
+
+**Commands:**
+```
+engram artifacts --session <id>
+engram artifacts --project monra --type file_write
+engram artifacts --recent 7d
+```
+
+**Why this matters:** When compression discards 98% of tokens, the artifact trail tells you *what actually happened* — which files changed, what commands ran, what broke. No one else preserves this through compression.
+
+**Build after:** v0.2.0. Data already exists in indexed messages — just needs extraction.
+
+See: [docs/research/compression-and-memory-landscape.md](docs/research/compression-and-memory-landscape.md)
+
+---
+
+### Structured Compression (Factory.ai-inspired)
+
+Replace freeform session summaries with anchored iterative summarization — dedicated sections that get merged into, not regenerated from scratch.
+
+**Format:**
+```
+## Session Intent
+[What the user was trying to accomplish]
+
+## Decisions Made
+[Key choices with rationale — preserved with full specificity]
+
+## Artifacts
+[Files, commands, APIs — from the artifact index]
+
+## Errors & Resolutions
+[Error→fix pairs with exact error codes and endpoints]
+
+## Open Questions
+[Unresolved issues, next steps]
+```
+
+**Key principle:** Dedicated sections force population of specific categories. Freeform prose drifts toward vague generalizations across compression cycles.
+
+**Benchmark target:** Factory scores 4.04/5 accuracy. Engram target: 4.10+ by combining structured format with artifact preservation.
+
+**Build after:** artifact trail index exists.
+
+See: [docs/research/compression-and-memory-landscape.md](docs/research/compression-and-memory-landscape.md)
+
+---
+
 ### Cost Intelligence Recommendations
 
 When Engram detects >30% of session tokens spent on file exploration (glob, grep, read patterns), recommend retrieval layer integration (e.g. Noodlebox/MCP).
