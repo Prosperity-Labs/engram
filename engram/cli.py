@@ -7,6 +7,56 @@ import json
 import sys
 
 
+def cmd_install(args: argparse.Namespace) -> None:
+    """Index all existing Claude Code sessions into the knowledge base."""
+    from pathlib import Path
+    from .recall.session_db import SessionDB
+
+    db = SessionDB()
+    base = Path.home() / ".claude" / "projects"
+
+    if not base.exists():
+        print(f"No sessions found at {base}")
+        print("Start using Claude Code to generate sessions, then run this again.")
+        return
+
+    sessions = sorted(base.glob("*/*.jsonl"), key=lambda p: p.stat().st_size, reverse=True)
+
+    if not sessions:
+        print(f"No .jsonl session files found in {base}")
+        return
+
+    print(f"Found {len(sessions)} session files in {base}")
+    print(f"Database: {db.db_path}\n")
+
+    indexed = 0
+    skipped = 0
+    total_messages = 0
+
+    for i, filepath in enumerate(sessions, 1):
+        session_id = filepath.stem
+        size_kb = filepath.stat().st_size / 1024
+
+        if db.is_indexed(session_id):
+            skipped += 1
+            print(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  (already indexed)")
+            continue
+
+        try:
+            result = db.index_session(filepath)
+            msg_count = result["messages_indexed"]
+            total_messages += msg_count
+            indexed += 1
+            print(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  -> {msg_count} messages")
+        except Exception as e:
+            print(f"  [{i}/{len(sessions)}] {session_id[:12]}...  ERROR: {e}")
+
+    print(f"\nDone: {indexed} sessions indexed ({total_messages} messages), {skipped} already indexed")
+
+    stats = db.stats()
+    print(f"\nKnowledge base: {stats['total_sessions']} sessions, {stats['total_messages']} messages, {stats['db_size_bytes'] / 1024:.0f} KB")
+
+
 def cmd_monitor(args: argparse.Namespace) -> None:
     """Show knowledge base stats, optionally watch with live indexing."""
     from .monitor import snapshot, render, watch
@@ -62,6 +112,10 @@ def main() -> None:
         description="Engram - Claude Code session knowledge base",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # install
+    p_install = subparsers.add_parser("install", help="Index all existing Claude Code sessions")
+    p_install.set_defaults(func=cmd_install)
 
     # monitor
     p_mon = subparsers.add_parser("monitor", help="Knowledge base stats and live indexing")
