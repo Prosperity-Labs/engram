@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram — Case Study</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080b0f;
+    --surface: #0d1117;
+    --border: #1a2030;
+    --border-bright: #2a3550;
+    --text: #c9d1d9;
+    --text-dim: #6e7f9a;
+    --text-bright: #e6edf3;
+    --accent: #00d4ff;
+    --accent-dim: rgba(0, 212, 255, 0.1);
+    --accent-border: rgba(0, 212, 255, 0.25);
+    --gold: #f0b429;
+    --gold-dim: rgba(240, 180, 41, 0.1);
+    --red: #ff4d6d;
+    --green: #39d353;
+    --green-dim: rgba(57, 211, 83, 0.1);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Noise texture overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1000;
+    opacity: 0.4;
+  }
+
+  .container {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 80px 40px;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 80px;
+    animation: fadeUp 0.8s ease both;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 48px;
+  }
+
+  .logo-mark {
+    width: 32px;
+    height: 32px;
+    border: 1.5px solid var(--accent);
+    border-radius: 6px;
+    display: grid;
+    place-items: center;
+    position: relative;
+  }
+
+  .logo-mark::before {
+    content: '';
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    border-radius: 2px;
+    box-shadow: 0 0 16px var(--accent);
+  }
+
+  .logo-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--text-bright);
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent-border);
+    background: var(--accent-dim);
+    padding: 4px 10px;
+    border-radius: 3px;
+    margin-bottom: 20px;
+  }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(32px, 5vw, 52px);
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--text-bright);
+    margin-bottom: 20px;
+    letter-spacing: -0.02em;
+  }
+
+  h1 em {
+    font-style: normal;
+    color: var(--accent);
+  }
+
+  .subtitle {
+    font-size: 15px;
+    color: var(--text-dim);
+    max-width: 560px;
+    line-height: 1.8;
+  }
+
+  /* Meta bar */
+  .meta-bar {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 64px;
+    animation: fadeUp 0.8s ease 0.1s both;
+  }
+
+  .meta-item {
+    background: var(--surface);
+    padding: 20px 24px;
+  }
+
+  .meta-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  .meta-value {
+    font-size: 13px;
+    color: var(--text-bright);
+    font-weight: 500;
+  }
+
+  /* Section */
+  .section {
+    margin-bottom: 64px;
+    animation: fadeUp 0.8s ease both;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .section-num {
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    min-width: 32px;
+  }
+
+  h2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: -0.01em;
+  }
+
+  .section-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  p {
+    color: var(--text);
+    margin-bottom: 16px;
+    line-height: 1.8;
+  }
+
+  /* Terminal block */
+  .terminal {
+    background: #060910;
+    border: 1px solid var(--border-bright);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 24px 0;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .terminal-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #ffbd2e; }
+  .dot-green { background: #28c840; }
+
+  .terminal-title {
+    margin-left: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  .terminal-body {
+    padding: 20px 24px;
+    font-size: 13px;
+    line-height: 1.9;
+  }
+
+  .cmd { color: var(--accent); }
+  .comment { color: var(--text-dim); }
+  .result { color: var(--green); }
+  .highlight { color: var(--gold); }
+  .dim { color: var(--text-dim); }
+
+  /* Finding cards */
+  .findings {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .finding-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .finding-card:hover {
+    border-color: var(--border-bright);
+  }
+
+  .finding-card.gold {
+    border-color: rgba(240, 180, 41, 0.3);
+    background: linear-gradient(135deg, var(--surface) 0%, rgba(240, 180, 41, 0.03) 100%);
+  }
+
+  .finding-card.gold::before {
+    content: 'HIGHEST VALUE';
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    color: var(--gold);
+    border: 1px solid rgba(240, 180, 41, 0.3);
+    padding: 3px 8px;
+    border-radius: 2px;
+  }
+
+  .finding-query {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+
+  .finding-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 10px;
+  }
+
+  .finding-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+
+  .finding-sessions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+
+  .session-pill {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border-bright);
+    color: var(--text-dim);
+  }
+
+  .session-pill.gold {
+    border-color: rgba(240, 180, 41, 0.4);
+    color: var(--gold);
+    background: rgba(240, 180, 41, 0.06);
+  }
+
+  /* Numbers */
+  .numbers-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .number-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 28px;
+  }
+
+  .number-card.accent {
+    border-color: var(--accent-border);
+    background: linear-gradient(135deg, var(--surface) 0%, var(--accent-dim) 100%);
+  }
+
+  .number-scenario {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+
+  .number-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .number-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .number-label { color: var(--text-dim); }
+
+  .number-value {
+    font-weight: 500;
+    color: var(--text-bright);
+  }
+
+  .number-value.green { color: var(--green); }
+  .number-value.red { color: var(--red); }
+  .number-value.gold { color: var(--gold); }
+
+  /* Insight callout */
+  .insight {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.05) 0%, transparent 100%);
+    border: 1px solid var(--accent-border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    padding: 24px 28px;
+    margin: 32px 0;
+  }
+
+  .insight-label {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+
+  .insight-text {
+    font-family: 'Syne', sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-bright);
+    line-height: 1.5;
+  }
+
+  /* Comparison bar */
+  .comparison {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 24px 0;
+  }
+
+  .comparison-header {
+    display: grid;
+    grid-template-columns: 200px 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .comparison-header div, .comparison-row > div {
+    padding: 14px 20px;
+    background: var(--surface);
+  }
+
+  .comparison-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+
+  .comparison-row .bad { color: var(--red); }
+  .comparison-row .good { color: var(--green); }
+  .comparison-row .row-label { color: var(--text-dim); font-size: 12px; }
+
+  /* Fix box */
+  .fix-box {
+    background: var(--green-dim);
+    border: 1px solid rgba(57, 211, 83, 0.2);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 24px 0;
+  }
+
+  .fix-label {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--green);
+    margin-bottom: 12px;
+  }
+
+  .fix-text {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.8;
+  }
+
+  /* Industry context */
+  .stat-highlight {
+    display: inline-block;
+    font-family: 'Syne', sans-serif;
+    font-size: 42px;
+    font-weight: 800;
+    color: var(--red);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-context {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .stat-block {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 28px;
+    text-align: center;
+  }
+
+  /* Footer */
+  .footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-dim);
+    animation: fadeUp 0.8s ease 0.4s both;
+  }
+
+  .footer-logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    color: var(--text-bright);
+    font-size: 14px;
+  }
+
+  /* Animations */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .section:nth-child(1) { animation-delay: 0.1s; }
+  .section:nth-child(2) { animation-delay: 0.15s; }
+  .section:nth-child(3) { animation-delay: 0.2s; }
+  .section:nth-child(4) { animation-delay: 0.25s; }
+  .section:nth-child(5) { animation-delay: 0.3s; }
+  .section:nth-child(6) { animation-delay: 0.35s; }
+
+  /* Horizontal rule */
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  @media (max-width: 640px) {
+    .container { padding: 40px 20px; }
+    .meta-bar { grid-template-columns: 1fr 1fr; }
+    .numbers-grid { grid-template-columns: 1fr; }
+    .stat-block { grid-template-columns: 1fr; }
+    .comparison-header, .comparison-row { grid-template-columns: 140px 1fr 1fr; }
+    .comparison-header div, .comparison-row > div { padding: 10px 14px; font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">
+      <div class="logo-mark"></div>
+      <span class="logo-name">ENGRAM</span>
+    </div>
+    <div class="tag">Case Study · February 2026</div>
+    <h1>Engram Found<br>What the <em>Plan Missed</em></h1>
+    <p class="subtitle">A real production session on Monra's fintech infrastructure. The agent skipped memory. We measured what it cost.</p>
+  </div>
+
+  <!-- Meta bar -->
+  <div class="meta-bar">
+    <div class="meta-item">
+      <div class="meta-label">Project</div>
+      <div class="meta-value">Monra fintech</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Session length</div>
+      <div class="meta-value">~4 hours</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Tasks</div>
+      <div class="meta-value">5 atomic tasks</div>
+    </div>
+    <div class="meta-item">
+      <div class="meta-label">Time saved</div>
+      <div class="meta-value" style="color: var(--green)">30–45 min</div>
+    </div>
+  </div>
+
+  <!-- Section 1 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">01</span>
+      <h2>What Happened</h2>
+      <div class="section-line"></div>
+    </div>
+    <p>We had a detailed implementation plan — stuck transactions, balance drift, incorrect frontend classification across Monra's ledger system. Five tasks. Four files. Clear root cause analysis.</p>
+    <p>Claude Code went straight to implementation without querying Engram. No memory. No prior context. Start from scratch. Exactly what every agent does today.</p>
+    <p>After the session closed, we ran three retroactive Engram searches — measuring what would have been found if the agent had looked.</p>
+
+    <div class="terminal">
+      <div class="terminal-header">
+        <div class="dot dot-red"></div>
+        <div class="dot dot-yellow"></div>
+        <div class="dot dot-green"></div>
+        <span class="terminal-title">retroactive validation — post-session</span>
+      </div>
+      <div class="terminal-body">
+        <span class="comment"># Query 1</span><br>
+        <span class="cmd">engram search "balance fix attribution" --limit 3</span><br>
+        <span class="result">Found 3 results</span><br><br>
+        <span class="comment"># Query 2</span><br>
+        <span class="cmd">engram search "transfer link handlers escrow" --limit 5</span><br>
+        <span class="result">Found 5 results</span><br><br>
+        <span class="comment"># Query 3</span><br>
+        <span class="cmd">engram search "CDK stack Lambda linkTransferBroadcastSuccess deploy" --limit 3</span><br>
+        <span class="result">Found 3 results</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 2 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <h2>What Engram Found</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="findings">
+      <div class="finding-card">
+        <div class="finding-query">Query 1 — "balance fix attribution"</div>
+        <div class="finding-title">Feb 7 session: balance correct, amounts stale</div>
+        <div class="finding-desc">Mentions <code>attributeTransaction</code> needing <code>destinationAmount</code>. Directly relevant to the balance/transaction interaction patterns — exactly the pattern we were fixing.</div>
+        <div class="finding-sessions">
+          <span class="session-pill">Feb 7 session</span>
+          <span class="session-pill">balance patterns</span>
+        </div>
+      </div>
+
+      <div class="finding-card gold">
+        <div class="finding-query">Query 2 — "transfer link handlers escrow"</div>
+        <div class="finding-title">Feb 16-17: Full dependency chain the plan missed</div>
+        <div class="finding-desc">These sessions contained the complete picture: no webhook handler for escrow deposits, legacy balance check gaps, the naming confusion between <code>transfer_link_created</code> vs <code>escrow_lock</code>, and <code>linkTransferBroadcastSuccess</code> end-to-end wiring listed as pending — exactly what we fixed today. The plan didn't mention CDK, API gateway, types, or schemas. These sessions showed all of it.</div>
+        <div class="finding-sessions">
+          <span class="session-pill gold">Feb 16 session</span>
+          <span class="session-pill gold">Feb 17 session</span>
+          <span class="session-pill">escrow architecture</span>
+          <span class="session-pill">CDK dependencies</span>
+        </div>
+      </div>
+
+      <div class="finding-card">
+        <div class="finding-query">Query 3 — "CDK stack Lambda deploy"</div>
+        <div class="finding-title">CDK deletion incident — live Lambdas at risk</div>
+        <div class="finding-desc">A CloudFormation incident deleting live Lambdas was documented in past sessions. No prior CDK deployment context existed in Engram before this session — confirming: if Engram had been running during Feb 17 when those Lambdas were first created, we would have known about the deletion risk before touching the stack.</div>
+        <div class="finding-sessions">
+          <span class="session-pill">CDK context</span>
+          <span class="session-pill">Lambda risk</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 3 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <h2>The Numbers</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="numbers-grid">
+      <div class="number-card">
+        <div class="number-scenario">Without Engram</div>
+        <div class="number-row">
+          <span class="number-label">Planned tasks (1-4)</span>
+          <span class="number-value">baseline</span>
+        </div>
+        <div class="number-row">
+          <span class="number-label">Unplanned infra work</span>
+          <span class="number-value red">+30–45 min</span>
+        </div>
+        <div class="number-row">
+          <span class="number-label">CDK deletion risk</span>
+          <span class="number-value red">undetected</span>
+        </div>
+      </div>
+      <div class="number-card accent">
+        <div class="number-scenario">With Engram (retroactive)</div>
+        <div class="number-row">
+          <span class="number-label">Planned tasks (1-4)</span>
+          <span class="number-value green">~10 min saved</span>
+        </div>
+        <div class="number-row">
+          <span class="number-label">Unplanned infra work</span>
+          <span class="number-value green">prevented</span>
+        </div>
+        <div class="number-row">
+          <span class="number-label">CDK deletion risk</span>
+          <span class="number-value green">surfaced early</span>
+        </div>
+      </div>
+    </div>
+
+    <p style="font-size:12px; color: var(--text-dim);">The planned tasks themselves benefited minimally — the plan was specific, the agent could read files directly. The value was entirely in what the plan didn't know existed.</p>
+  </div>
+
+  <!-- Insight -->
+  <div class="insight">
+    <div class="insight-label">Key Finding</div>
+    <div class="insight-text">Engram's highest value is surfacing implicit dependencies that aren't in the plan — because the planner didn't know they existed.</div>
+  </div>
+
+  <!-- Section 4 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">04</span>
+      <h2>The Problem This Proves</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <p>The agent skipped Engram voluntarily. The recall step was in the prompt. It was optional. So it was skipped.</p>
+    <p>Every AI agent today has the same amnesia. Plans miss what the planner doesn't know. Sessions end and everything is lost. The next agent starts from zero, re-discovers the same codebase, hits the same implicit dependencies, burns the same tokens.</p>
+
+    <div class="comparison">
+      <div class="comparison-header">
+        <div></div>
+        <div>Without Engram</div>
+        <div>With Engram</div>
+      </div>
+      <div class="comparison-row">
+        <div class="row-label">Session start</div>
+        <div class="bad">Zero context</div>
+        <div class="good">Past sessions injected</div>
+      </div>
+      <div class="comparison-row">
+        <div class="row-label">Implicit deps</div>
+        <div class="bad">Rediscovered</div>
+        <div class="good">Already known</div>
+      </div>
+      <div class="comparison-row">
+        <div class="row-label">Past mistakes</div>
+        <div class="bad">Repeated</div>
+        <div class="good">Avoided</div>
+      </div>
+      <div class="comparison-row">
+        <div class="row-label">Token cost</div>
+        <div class="bad">Full exploration</div>
+        <div class="good">Targeted retrieval</div>
+      </div>
+    </div>
+
+    <div class="fix-box">
+      <div class="fix-label">The Fix — Day 6 of Execution Plan</div>
+      <div class="fix-text"><strong style="color: var(--green)">SessionStart auto-injection.</strong> Before the agent makes its first tool call, Engram automatically queries past sessions based on current project context and injects the results. The agent can't skip what it never chose to do.</div>
+    </div>
+  </div>
+
+  <!-- Section 5 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">05</span>
+      <h2>Industry Context</h2>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="stat-block">
+      <div class="stat-card">
+        <div class="stat-highlight">2.45<span style="font-size:24px">/5</span></div>
+        <div class="stat-context" style="margin-top:8px">Factory.ai's best-in-class structured summarization score on artifact tracking — knowing which files were touched during a session</div>
+      </div>
+      <div class="stat-card" style="border-color: var(--accent-border);">
+        <div class="stat-highlight" style="color: var(--accent)">&#8734;</div>
+        <div class="stat-context" style="margin-top:8px">Engram's deterministic manifest parsing. Not LLM inference — actual tool call extraction from JSONL. Every Read, Edit, Write, Bash call captured as structured artifact row.</div>
+      </div>
+    </div>
+
+    <p>Factory.ai explicitly calls artifact tracking out as requiring a separate artifact index. Engram is that index — built from day one as a first-class concern, not bolted on as an afterthought.</p>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div>
+      <span class="footer-logo">ENGRAM</span>
+      <span style="margin-left: 16px">v0.1.0 &middot; February 2026</span>
+    </div>
+    <div>pip install engram</div>
+  </div>
+
+</div>
+</body>
+</html>
