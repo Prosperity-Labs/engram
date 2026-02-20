@@ -2,6 +2,8 @@
 
 ## WEEK 1 — Foundation
 - **Day 1 [DONE]:** AgentAdapter base class, refactor JSONL parser into ClaudeCodeAdapter. 21 tests passing. Branch: `day1/agent-adapter`.
+- **Day 1.5 [DONE]:** Public API (`from engram import SessionIndexer, search`), granular token costs (cache_read vs input vs cache_create), `engram costs` + `engram reindex` CLI. Full re-index: $3,151 across 243 sessions, 81% cache savings. Branch: `fix/public-api-and-costs` (merged to main).
+- **Day 1.75 [DONE]:** `engram insights` — analytics CLI (tool usage, cache efficiency, error patterns, topics, coding hours, cost outliers). Branch: `feat/insights-command`.
 - **Day 2:** CursorAdapter — wire Cursor stop hook, sessions appear in engram inspect-list
 - **Day 3:** CodexAdapter — wire Codex notify hook, same
 - **Day 4:** Structured summarization — 5 sections: Intent, Decisions, Errors, Current State, Next Steps

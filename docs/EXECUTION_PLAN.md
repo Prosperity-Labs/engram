@@ -80,6 +80,23 @@ Outcome: `AgentAdapter` base class + `ClaudeCodeAdapter` refactor
   - `tests/`: conftest.py fixtures (Claude Code + Codex formats), test_base.py (9), test_claude_code_adapter.py (12)
   - Discovered Codex JSONL format at `~/.codex/sessions/` (5 sessions) and `~/.codex/history.jsonl` (26 entries)
 
+**Day 1.5 [DONE] (Thu Feb 20, evening)**
+Outcome: Public API + Granular Token Costs — accurate cost tracking for all sessions
+- `engram/__init__.py`: Public API — `from engram import SessionIndexer, search`
+- Granular token schema: `cache_read_tokens`, `cache_create_tokens` columns (auto-migrates)
+- `session_costs()` method with Opus pricing ($15/M input, $1.50/M cache_read, $18.75/M cache_create, $75/M output)
+- CLI: `engram costs` (per-session breakdown), `engram reindex` (backfills granular tokens)
+- Full re-index of 243 sessions: $3,151 total, 81% saved by cache. Previously estimated at $17,947.
+- Branch: `fix/public-api-and-costs` (merged to main)
+- Done when: `engram costs` shows accurate per-session costs with cache breakdown — DONE
+
+**Day 1.75 [DONE] (Fri Feb 21)**
+Outcome: `engram insights` — analytics CLI surfacing tool usage, cache efficiency, error patterns, topics
+- `insights()` method in session_db.py: 8 analytics queries
+- `cmd_insights` in cli.py: formatted dashboard + `--json` flag
+- Branch: `feat/insights-command`
+- Result: 243 sessions analyzed. $3,568 total spend, 80% saved by caching. Identified recurring topic patterns (webhook in 123 sessions), error loops (24% error rate session), cost outliers ($0.43/msg openclaw).
+
 **Day 2 (Fri Feb 21)**
 Outcome: `CursorAdapter` wired — Cursor sessions flow into Engram
 - Wire Engram's hook script into Cursor's `~/.cursor/hooks.json` as a `stop` hook

@@ -7,6 +7,22 @@ import json
 import sys
 
 
+def _short_project(name: str | None) -> str:
+    """Shorten Claude Code project paths to readable names."""
+    if not name:
+        return "?"
+    # Strip common prefix: -home-user-Desktop-development-
+    parts = name.strip("-").split("-")
+    # Find 'development' or 'Desktop' and take everything after
+    for marker in ("development", "Desktop"):
+        if marker in parts:
+            idx = parts.index(marker)
+            rest = parts[idx + 1:]
+            if rest:
+                return "-".join(rest)
+    return name
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     """Index all existing sessions into the knowledge base."""
     from pathlib import Path
@@ -135,6 +151,106 @@ def cmd_costs(args: argparse.Namespace) -> None:
         print("\n* = needs re-index for accurate cost (run `engram reindex`)")
 
 
+def cmd_insights(args: argparse.Namespace) -> None:
+    """Show analytics across all indexed sessions."""
+    from .recall.session_db import SessionDB
+
+    db = SessionDB()
+    data = db.insights()
+
+    if args.json:
+        import json as _json
+        print(_json.dumps(data, indent=2, default=str))
+        return
+
+    stats = db.stats()
+    print("Engram Insights")
+    print("=" * 50)
+    print(f"{stats['total_sessions']} sessions | {stats['total_messages']} messages | {stats['db_size_bytes'] / 1024:.0f} KB\n")
+
+    # Cache efficiency
+    ce = data["cache_efficiency"]
+    print("Cache Efficiency")
+    print("-" * 40)
+    print(f"  Cache read:    {ce['cache_read_pct']}% of input tokens")
+    print(f"  Actual cost:   ${ce['cost_actual']:,.2f}")
+    print(f"  Without cache: ${ce['cost_without_cache']:,.2f}")
+    print(f"  Saved:         ${ce['savings']:,.2f} ({ce['savings_pct']}%)")
+    print()
+
+    # Tool usage
+    if data["tool_usage"]:
+        print("Top Tools")
+        print("-" * 40)
+        max_count = data["tool_usage"][0]["count"]
+        for t in data["tool_usage"][:10]:
+            bar_len = int(t["count"] / max_count * 20)
+            bar = "#" * bar_len
+            print(f"  {t['tool']:>15}  {bar}  {t['count']}")
+        print()
+
+    # Projects
+    if data["projects"]:
+        print("Projects")
+        print("-" * 40)
+        for p in data["projects"][:8]:
+            name = _short_project(p["project"])
+            print(f"  {name[:30]:<30}  {p['sessions']:>3} sessions  {p['messages']:>5} msgs")
+        print()
+
+    # Role breakdown
+    rb = data["role_breakdown"]
+    if rb:
+        print("Messages by Role")
+        print("-" * 40)
+        for role, count in rb.items():
+            print(f"  {role:<12} {count:>8,}")
+        print()
+
+    # Hourly activity
+    hourly = data["hourly_activity"]
+    if hourly:
+        print("Coding Hours (sessions started)")
+        print("-" * 40)
+        max_h = max(hourly.values()) if hourly else 1
+        for h in range(24):
+            c = hourly.get(h, 0)
+            if c > 0:
+                bar = "#" * int(c / max_h * 20)
+                print(f"  {h:02d}:00  {bar}  {c}")
+        print()
+
+    # Expensive sessions
+    if data["expensive_sessions"]:
+        print("Most Expensive (per message)")
+        print("-" * 40)
+        for e in data["expensive_sessions"][:5]:
+            proj = _short_project(e["project"])[:20]
+            print(f"  {e['session_id'][:12]}..  {proj:<20}  {e['messages']:>4} msgs  ${e['total_cost']:>7.2f}  (${e['cost_per_msg']:.3f}/msg)")
+        print()
+
+    # Error sessions
+    if data["error_sessions"]:
+        print("Error-Heavy Sessions")
+        print("-" * 40)
+        for e in data["error_sessions"][:5]:
+            proj = _short_project(e["project"])[:20]
+            print(f"  {e['session_id'][:12]}..  {proj:<20}  {e['error_messages']:>3} errors / {e['total_messages']} msgs ({e['error_pct']}%)")
+        print()
+
+    # Topics
+    topics = data["topics"]
+    if topics:
+        sorted_topics = sorted(topics.items(), key=lambda x: x[1], reverse=True)
+        nonzero = [(k, v) for k, v in sorted_topics if v > 0]
+        if nonzero:
+            print("Topics (sessions mentioning)")
+            print("-" * 40)
+            for kw, count in nonzero:
+                print(f"  {kw:<15} {count:>4} sessions")
+            print()
+
+
 def cmd_reindex(args: argparse.Namespace) -> None:
     """Re-index all sessions to backfill granular token data."""
     from pathlib import Path
@@ -195,6 +311,11 @@ def main() -> None:
     p_costs = subparsers.add_parser("costs", help="Show estimated token costs per session")
     p_costs.add_argument("--limit", "-n", type=int, default=10, help="Number of sessions to show (default: 10)")
     p_costs.set_defaults(func=cmd_costs)
+
+    # insights
+    p_insights = subparsers.add_parser("insights", help="Analytics dashboard across all sessions")
+    p_insights.add_argument("--json", action="store_true", help="Output raw JSON instead of formatted text")
+    p_insights.set_defaults(func=cmd_insights)
 
     # reindex
     p_reindex = subparsers.add_parser("reindex", help="Re-index all sessions (backfills granular token data)")

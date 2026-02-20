@@ -438,6 +438,167 @@ class SessionDB:
             })
         return results
 
+    def insights(self) -> dict:
+        """Compute analytics across all indexed sessions.
+
+        Returns dict with keys:
+            tool_usage, role_breakdown, projects, cache_efficiency,
+            hourly_activity, error_sessions, expensive_sessions, topics
+        """
+        with self._connect() as conn:
+            # Tool usage
+            tool_usage = [
+                {"tool": row["tool_name"], "count": row["cnt"]}
+                for row in conn.execute("""
+                    SELECT tool_name, COUNT(*) as cnt
+                    FROM messages
+                    WHERE tool_name IS NOT NULL AND tool_name != ''
+                    GROUP BY tool_name ORDER BY cnt DESC LIMIT 15
+                """)
+            ]
+
+            # Role breakdown
+            role_breakdown = {
+                row["role"]: row["cnt"]
+                for row in conn.execute("""
+                    SELECT role, COUNT(*) as cnt
+                    FROM messages GROUP BY role ORDER BY cnt DESC
+                """)
+            }
+
+            # Projects
+            projects = [
+                {
+                    "project": row["project"],
+                    "sessions": row["cnt"],
+                    "messages": row["msgs"],
+                }
+                for row in conn.execute("""
+                    SELECT project, COUNT(*) as cnt, SUM(message_count) as msgs
+                    FROM sessions WHERE project IS NOT NULL
+                    GROUP BY project ORDER BY cnt DESC LIMIT 10
+                """)
+            ]
+
+            # Cache efficiency
+            cache_row = conn.execute("""
+                SELECT
+                    SUM(token_usage_in) as input,
+                    SUM(cache_read_tokens) as cache_read,
+                    SUM(cache_create_tokens) as cache_create,
+                    SUM(token_usage_out) as output
+                FROM messages
+            """).fetchone()
+            total_input = (
+                cache_row["input"] + cache_row["cache_read"] + cache_row["cache_create"]
+            )
+            cost_actual = (
+                cache_row["input"] * self._COST_PER_M["input"]
+                + cache_row["cache_read"] * self._COST_PER_M["cache_read"]
+                + cache_row["cache_create"] * self._COST_PER_M["cache_create"]
+                + cache_row["output"] * self._COST_PER_M["output"]
+            ) / 1_000_000
+            cost_no_cache = (
+                total_input * self._COST_PER_M["input"]
+                + cache_row["output"] * self._COST_PER_M["output"]
+            ) / 1_000_000
+            cache_efficiency = {
+                "total_input_tokens": total_input,
+                "cache_read": cache_row["cache_read"],
+                "cache_create": cache_row["cache_create"],
+                "uncached_input": cache_row["input"],
+                "output_tokens": cache_row["output"],
+                "cache_read_pct": round(cache_row["cache_read"] / total_input * 100, 1) if total_input else 0,
+                "cost_actual": round(cost_actual, 2),
+                "cost_without_cache": round(cost_no_cache, 2),
+                "savings": round(cost_no_cache - cost_actual, 2),
+                "savings_pct": round((1 - cost_actual / cost_no_cache) * 100) if cost_no_cache else 0,
+            }
+
+            # Hourly activity
+            hourly = {}
+            for row in conn.execute(
+                "SELECT created_at FROM sessions WHERE created_at IS NOT NULL"
+            ):
+                ts = row["created_at"] or ""
+                if "T" in ts:
+                    try:
+                        h = int(ts.split("T")[1][:2])
+                        hourly[h] = hourly.get(h, 0) + 1
+                    except (ValueError, IndexError):
+                        pass
+
+            # Error-heavy sessions
+            error_sessions = [
+                {
+                    "session_id": row["session_id"],
+                    "project": row["project"],
+                    "error_messages": row["err"],
+                    "total_messages": row["message_count"],
+                    "error_pct": round(row["err"] / row["message_count"] * 100) if row["message_count"] else 0,
+                }
+                for row in conn.execute("""
+                    SELECT m.session_id, s.project, COUNT(*) as err, s.message_count
+                    FROM messages m
+                    JOIN sessions s ON s.session_id = m.session_id
+                    WHERE (m.content LIKE '%error%' OR m.content LIKE '%Error%'
+                           OR m.content LIKE '%FAIL%' OR m.content LIKE '%failed%')
+                    AND m.role = 'assistant'
+                    GROUP BY m.session_id ORDER BY COUNT(*) DESC LIMIT 10
+                """)
+            ]
+
+            # Most expensive per-message
+            expensive = [
+                {
+                    "session_id": row["sid"],
+                    "project": row["project"],
+                    "messages": row["mc"],
+                    "total_cost": round(
+                        (row["ti"] * 15 + row["cr"] * 1.5 + row["cc"] * 18.75 + row["to_"] * 75) / 1e6, 2
+                    ),
+                    "cost_per_msg": round(
+                        (row["ti"] * 15 + row["cr"] * 1.5 + row["cc"] * 18.75 + row["to_"] * 75) / 1e6 / row["mc"], 3
+                    ),
+                }
+                for row in conn.execute("""
+                    SELECT s.session_id as sid, s.project, s.message_count as mc,
+                           SUM(m.token_usage_in) as ti, SUM(m.cache_read_tokens) as cr,
+                           SUM(m.cache_create_tokens) as cc, SUM(m.token_usage_out) as to_
+                    FROM sessions s JOIN messages m ON m.session_id = s.session_id
+                    WHERE s.message_count > 20
+                    GROUP BY s.session_id
+                    ORDER BY (SUM(m.token_usage_in)*15.0 + SUM(m.cache_read_tokens)*1.5
+                             + SUM(m.cache_create_tokens)*18.75 + SUM(m.token_usage_out)*75.0)
+                             / s.message_count DESC
+                    LIMIT 10
+                """)
+            ]
+
+            # Topic frequency
+            topic_keywords = [
+                "webhook", "deploy", "migration", "KYB", "KYC", "withdraw",
+                "deposit", "balance", "wallet", "docker", "database", "test", "bug", "fix",
+            ]
+            topics = {}
+            for kw in topic_keywords:
+                row = conn.execute(
+                    "SELECT COUNT(DISTINCT session_id) as c FROM messages WHERE content LIKE ?",
+                    (f"%{kw}%",),
+                ).fetchone()
+                topics[kw] = row["c"]
+
+        return {
+            "tool_usage": tool_usage,
+            "role_breakdown": role_breakdown,
+            "projects": projects,
+            "cache_efficiency": cache_efficiency,
+            "hourly_activity": hourly,
+            "error_sessions": error_sessions,
+            "expensive_sessions": expensive,
+            "topics": topics,
+        }
+
     # ------------------------------------------------------------------
     # JSONL parsing
     # ------------------------------------------------------------------
