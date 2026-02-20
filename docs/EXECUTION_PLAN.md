@@ -86,19 +86,22 @@ Outcome: `CodexAdapter` wired — Codex sessions flow into Engram
 - Done when: a Codex session appears in Engram alongside Cursor and Claude Code sessions
 
 **Day 4 (Sun Feb 23)**
-Outcome: Structured Summarization — agent-agnostic
-- Replace freeform compression with section-based format on `EngramSession`:
-  `## Session Intent | ## Files Modified | ## API Calls | ## Decisions | ## Next Steps`
-- Works identically regardless of which agent produced the session
-- Done when: `engram compress` produces structured 5-section output for sessions from any agent
+Outcome: Structured Summarization — sections match ARCHITECTURE.md, iterative merging
+- Replace freeform compression with 5 explicit sections:
+  `## Session Intent | ## Decisions Made | ## Errors & Resolutions | ## Current State | ## Next Steps`
+- LLM must populate each section explicitly — empty = explicitly empty, not forgotten
+- First compression: generate from scratch. Subsequent: merge new span INTO existing structure (not regenerate)
+- Done when: `engram compress` on any session produces all 5 sections with real specifics, not vague prose
 
 **Day 5 (Mon Feb 24)**
-Outcome: Artifact Manifest — deterministic, agent-agnostic
-- `~/.engram/manifests/{session_id}.json`
-- Claude Code: extracted from JSONL tool calls
-- Cursor: fed directly from `afterFileEdit` hook events (most accurate of any agent — real-time)
-- Codex: extracted from `command_execution` and `file_changes` JSONL event types
-- Done when: manifest files appear for sessions from all three agents with correct file paths
+Outcome: Artifact Manifest — file paths first, schema from ARCHITECTURE.md
+- SQLite `artifacts` table: `session_id, agent, type, target, detail, sequence, timestamp`
+- `type` values: `file_read | file_write | command | api_call | error | error_resolved`
+- Cursor: `afterFileEdit` writes rows in real time as files change (no post-hoc inference)
+- Claude Code: SessionEnd hook extracts all `Read`, `Edit`, `Write`, `Bash` tool_use blocks
+- Codex: `agent-turn-complete` parses `command_execution` and `file_changes` events
+- **File paths only for now** — commands and APIs expand in Week 2
+- Done when: manifest rows exist in SQLite for sessions from all three agents with correct paths
 
 **Day 6 (Tue Feb 25)**
 Outcome: Manifest survives compression + injected on startup
@@ -130,10 +133,10 @@ Outcome: `engram manifest show` CLI command
 - Done when: command works cleanly with no docs needed
 
 **Day 10 (Sat Mar 1)**
-Outcome: Tool output caching by hash (all adapters)
-- `tool_outputs: [{tool, input_hash, output_preview}]` added to manifest schema
-- Foundation for replay: if hash matches, return cached output instead of re-running
-- Done when: manifest records hashed tool outputs for sessions from any agent
+Outcome: Commands + API calls added to artifact manifest
+- Expand `artifacts` table rows for `command` and `api_call` types (file tracking already done)
+- Add tool output hash to each artifact row: enables replay cache (if hash matches, return cached)
+- Done when: manifest shows FILES + COMMANDS + API CALLS sections for sessions from any agent
 
 **Day 11 (Sun Mar 2)**
 Outcome: PyPI publish — `pip install engram` works globally
@@ -263,12 +266,18 @@ The extra 3 days of adapter work in Week 1 pays back immediately:
 ---
 
 ## What to Ignore for Now
-- Gemini/Google adapter — add after v0.1.0, the pattern makes it easy
+- Gemini/Google adapter — add after v0.1.0, same pattern as Cursor/Codex
 - Fundraising — wait for 10 upset-if-gone users
 - Batch Regression + Simulation — Phase 3
-- Domain Knowledge Graph for Monra — future Engram extension
+- Domain Knowledge Graph for Monra — future Engram extension (noted in ARCHITECTURE.md)
 - Paid tier / cloud storage — wait for Day 26 value conversations
 - Web UI — keep terminal-first until someone asks
+- `engram-graph` optional extension (ChromaDB + Memgraph) — separate package, not in core
+
+## Ship With the Repo on Day 7
+- `ARCHITECTURE.md` — explains the two-layer design, benchmark targets, build order
+- This is the document that earns trust with contributors and sophisticated early users
+- Do not simplify it — developers who read it should feel like you've done the thinking
 
 ---
 
