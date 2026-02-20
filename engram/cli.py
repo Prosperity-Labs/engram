@@ -8,25 +8,22 @@ import sys
 
 
 def cmd_install(args: argparse.Namespace) -> None:
-    """Index all existing Claude Code sessions into the knowledge base."""
+    """Index all existing sessions into the knowledge base."""
     from pathlib import Path
     from .recall.session_db import SessionDB
+    from .adapters.claude_code import ClaudeCodeAdapter
 
     db = SessionDB()
-    base = Path.home() / ".claude" / "projects"
+    adapter = ClaudeCodeAdapter()
+    session_paths = adapter.discover_sessions()
 
-    if not base.exists():
-        print(f"No sessions found at {base}")
+    if not session_paths:
+        print("No session files found.")
         print("Start using Claude Code to generate sessions, then run this again.")
         return
 
-    sessions = sorted(base.glob("*/*.jsonl"), key=lambda p: p.stat().st_size, reverse=True)
-
-    if not sessions:
-        print(f"No .jsonl session files found in {base}")
-        return
-
-    print(f"Found {len(sessions)} session files in {base}")
+    sessions = [Path(p) for p in session_paths]
+    print(f"Found {len(sessions)} session files")
     print(f"Database: {db.db_path}\n")
 
     indexed = 0
