@@ -123,6 +123,42 @@ Project: monra-app (12 sessions, 145M tokens)
 
 ---
 
+### Git Integration
+
+`engram search` returns relevant sessions AND correlates them with actual git history — closing the gap between "what we discussed" and "what we shipped."
+
+**What it adds to search results:**
+- Which commits touched the searched files
+- What actually changed (diff) vs what was planned (session intent)
+- Commit ↔ session linking via timestamps and file overlap
+
+**Commands:**
+```
+engram search "deposit flow" --git     # search results enriched with commit context
+engram diff --session <id>             # what shipped vs what was discussed
+engram trail --file src/deposits.py    # session history + git history interleaved
+```
+
+**Example output:**
+```
+Session abc123 (2026-02-18, monra-core)
+  Intent: "Fix deposit webhook retry logic"
+  Files discussed: src/deposits/webhook.py, src/deposits/retry.py
+
+  Linked commits:
+    a1b2c3d  fix: handle duplicate webhook events  (2h after session)
+    d4e5f6g  test: add webhook retry integration tests
+
+  Drift: session discussed adding exponential backoff,
+         but commit only added dedup check — backoff not shipped.
+```
+
+**Why this matters:** Sessions capture intent and reasoning. Git captures what actually happened. Neither alone tells the full story. Together they answer: "Did we actually ship what we discussed? What fell through the cracks?"
+
+**Build after:** v0.2.0. Requires artifact trail index for file-level session↔commit matching.
+
+---
+
 ### Architectural Knowledge Extraction
 
 Analyze sessions across a project to extract implicit architectural knowledge — sequence diagrams, verification rules, invariants, dependency maps.

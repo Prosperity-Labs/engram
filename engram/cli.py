@@ -28,17 +28,33 @@ def cmd_install(args: argparse.Namespace) -> None:
     from pathlib import Path
     from .recall.session_db import SessionDB
     from .adapters.claude_code import ClaudeCodeAdapter
+    from .adapters.codex import CodexAdapter
 
     db = SessionDB()
-    adapter = ClaudeCodeAdapter()
-    session_paths = adapter.discover_sessions()
+    claude_adapter = ClaudeCodeAdapter()
+    codex_adapter = CodexAdapter()
 
-    if not session_paths:
+    all_sessions = []
+    for path in claude_adapter.discover_sessions():
+        all_sessions.append(("claude_code", path))
+    for path in codex_adapter.discover_sessions():
+        all_sessions.append(("codex", path))
+
+    # Try Cursor too if available
+    try:
+        from .adapters.cursor import CursorAdapter
+        cursor_adapter = CursorAdapter()
+        for path in cursor_adapter.discover_sessions():
+            all_sessions.append(("cursor", path))
+    except ImportError:
+        pass
+
+    if not all_sessions:
         print("No session files found.")
-        print("Start using Claude Code to generate sessions, then run this again.")
+        print("Start using Claude Code, Codex, or Cursor to generate sessions, then run this again.")
         return
 
-    sessions = [Path(p) for p in session_paths]
+    sessions = [(agent, Path(p)) for agent, p in all_sessions]
     print(f"Found {len(sessions)} session files")
     print(f"Database: {db.db_path}\n")
 
@@ -46,7 +62,7 @@ def cmd_install(args: argparse.Namespace) -> None:
     skipped = 0
     total_messages = 0
 
-    for i, filepath in enumerate(sessions, 1):
+    for i, (agent, filepath) in enumerate(sessions, 1):
         session_id = filepath.stem
         size_kb = filepath.stat().st_size / 1024
 
@@ -56,7 +72,19 @@ def cmd_install(args: argparse.Namespace) -> None:
             continue
 
         try:
-            result = db.index_session(filepath)
+            if agent == "claude_code":
+                session = claude_adapter.parse_file(str(filepath))
+            elif agent == "codex":
+                session = codex_adapter.parse_file(str(filepath))
+            elif agent == "cursor":
+                from .adapters.cursor import CursorAdapter
+
+                cursor_adapter = CursorAdapter()
+                session = cursor_adapter.parse_file(str(filepath))
+            else:
+                raise ValueError(f"Unknown agent: {agent}")
+
+            result = db.index_from_session(session, filepath)
             msg_count = result["messages_indexed"]
             total_messages += msg_count
             indexed += 1
