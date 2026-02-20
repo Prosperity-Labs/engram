@@ -8,25 +8,22 @@ import sys
 
 
 def cmd_install(args: argparse.Namespace) -> None:
-    """Index all existing Claude Code sessions into the knowledge base."""
+    """Index all existing sessions into the knowledge base."""
     from pathlib import Path
     from .recall.session_db import SessionDB
+    from .adapters.claude_code import ClaudeCodeAdapter
 
     db = SessionDB()
-    base = Path.home() / ".claude" / "projects"
+    adapter = ClaudeCodeAdapter()
+    session_paths = adapter.discover_sessions()
 
-    if not base.exists():
-        print(f"No sessions found at {base}")
+    if not session_paths:
+        print("No session files found.")
         print("Start using Claude Code to generate sessions, then run this again.")
         return
 
-    sessions = sorted(base.glob("*/*.jsonl"), key=lambda p: p.stat().st_size, reverse=True)
-
-    if not sessions:
-        print(f"No .jsonl session files found in {base}")
-        return
-
-    print(f"Found {len(sessions)} session files in {base}")
+    sessions = [Path(p) for p in session_paths]
+    print(f"Found {len(sessions)} session files")
     print(f"Database: {db.db_path}\n")
 
     indexed = 0
@@ -106,6 +103,68 @@ def cmd_search(args: argparse.Namespace) -> None:
         print()
 
 
+def cmd_costs(args: argparse.Namespace) -> None:
+    """Show estimated costs per session."""
+    from .recall.session_db import SessionDB
+
+    db = SessionDB()
+    costs = db.session_costs(limit=args.limit)
+
+    if not costs:
+        print("No sessions indexed. Run `engram install` first.")
+        return
+
+    print(f"{'Session':>18} | {'Project':>20} | {'Msgs':>6} | {'Input':>10} | {'Cache Read':>12} | {'Cache Create':>12} | {'Output':>8} | {'Cost':>8}")
+    print("-" * 115)
+    total = 0.0
+    for c in costs:
+        proj = (c["project"] or "?")[:20]
+        sid = c["session_id"][:16]
+        has_cache = c["cache_read_tokens"] > 0
+        marker = "" if has_cache else "*"
+        print(
+            f"  {sid}.. | {proj:>20} | {c['message_count']:>6} | "
+            f"{c['input_tokens']:>10,} | {c['cache_read_tokens']:>12,} | "
+            f"{c['cache_create_tokens']:>12,} | {c['output_tokens']:>8,} | "
+            f"${c['estimated_cost']:>7.2f}{marker}"
+        )
+        total += c["estimated_cost"]
+
+    print(f"\nTotal: ${total:.2f}")
+    if any(c["cache_read_tokens"] == 0 and c["input_tokens"] > 0 for c in costs):
+        print("\n* = needs re-index for accurate cost (run `engram reindex`)")
+
+
+def cmd_reindex(args: argparse.Namespace) -> None:
+    """Re-index all sessions to backfill granular token data."""
+    from pathlib import Path
+    from .recall.session_db import SessionDB
+    from .adapters.claude_code import ClaudeCodeAdapter
+
+    db = SessionDB()
+    adapter = ClaudeCodeAdapter()
+    sessions = adapter.discover_sessions()
+
+    print(f"Re-indexing {len(sessions)} sessions for granular token tracking...")
+    reindexed = 0
+    errors = 0
+
+    for i, filepath_str in enumerate(sessions, 1):
+        filepath = Path(filepath_str)
+        session_id = filepath.stem
+        size_kb = filepath.stat().st_size / 1024
+        try:
+            result = db.index_session(filepath)
+            reindexed += 1
+            if i % 20 == 0 or i == len(sessions):
+                print(f"  [{i}/{len(sessions)}] {reindexed} re-indexed, {errors} errors")
+        except Exception as e:
+            errors += 1
+
+    print(f"\nDone: {reindexed} re-indexed, {errors} errors")
+    print("Run `engram costs` to see accurate cost breakdown.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="engram",
@@ -131,6 +190,15 @@ def main() -> None:
     p_search.add_argument("--role", choices=["user", "assistant", "summary"], help="Filter by role")
     p_search.add_argument("--session", help="Filter to a specific session ID")
     p_search.set_defaults(func=cmd_search)
+
+    # costs
+    p_costs = subparsers.add_parser("costs", help="Show estimated token costs per session")
+    p_costs.add_argument("--limit", "-n", type=int, default=10, help="Number of sessions to show (default: 10)")
+    p_costs.set_defaults(func=cmd_costs)
+
+    # reindex
+    p_reindex = subparsers.add_parser("reindex", help="Re-index all sessions (backfills granular token data)")
+    p_reindex.set_defaults(func=cmd_reindex)
 
     args = parser.parse_args()
     if not args.command:

@@ -23,15 +23,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS messages (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id      TEXT NOT NULL REFERENCES sessions(session_id),
-    sequence        INTEGER NOT NULL,
-    role            TEXT NOT NULL,
-    content         TEXT,
-    timestamp       TEXT,
-    tool_name       TEXT,
-    token_usage_in  INTEGER DEFAULT 0,
-    token_usage_out INTEGER DEFAULT 0,
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id          TEXT NOT NULL REFERENCES sessions(session_id),
+    sequence            INTEGER NOT NULL,
+    role                TEXT NOT NULL,
+    content             TEXT,
+    timestamp           TEXT,
+    tool_name           TEXT,
+    token_usage_in      INTEGER DEFAULT 0,
+    token_usage_out     INTEGER DEFAULT 0,
+    cache_read_tokens   INTEGER DEFAULT 0,
+    cache_create_tokens INTEGER DEFAULT 0,
     UNIQUE(session_id, sequence)
 );
 
@@ -89,22 +91,52 @@ class SessionDB:
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA_SQL)
+            self._migrate(conn)
+
+    def _migrate(self, conn) -> None:
+        """Add columns that may be missing from older databases."""
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "cache_read_tokens" not in columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+        if "cache_create_tokens" not in columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN cache_create_tokens INTEGER DEFAULT 0")
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def index_session(self, filepath: Path) -> dict:
-        """Parse an entire JSONL session file, store session + messages."""
-        filepath = Path(filepath)
-        session_id = filepath.stem
-        project = _guess_project(filepath)
-        messages = self._extract_messages(filepath)
+        """Parse a JSONL session file via ClaudeCodeAdapter, store session + messages."""
+        from ..adapters.claude_code import ClaudeCodeAdapter
 
-        stat = filepath.stat()
-        timestamps = [m["timestamp"] for m in messages if m.get("timestamp")]
-        created_at = min(timestamps) if timestamps else None
-        updated_at = max(timestamps) if timestamps else None
+        filepath = Path(filepath)
+        adapter = ClaudeCodeAdapter()
+        session = adapter.parse_file(str(filepath))
+        return self.index_from_session(session, filepath)
+
+    def index_from_session(self, session, filepath: Path | None = None) -> dict:
+        """Index an EngramSession into the database.
+
+        Works with any adapter's output — agent-agnostic.
+        """
+        from ..adapters.base import EngramSession
+
+        session_id = session.session_id
+        project = session.project
+        messages = session.to_message_dicts()
+
+        if filepath is None and session.filepath:
+            filepath = Path(session.filepath)
+
+        file_size = 0
+        if filepath:
+            filepath = Path(filepath)
+            try:
+                file_size = filepath.stat().st_size
+            except OSError:
+                pass
 
         with self._connect() as conn:
             conn.execute(
@@ -112,10 +144,16 @@ class SessionDB:
                    (session_id, filepath, project, message_count,
                     file_size_bytes, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, str(filepath), project, len(messages),
-                 stat.st_size, created_at, updated_at),
+                (
+                    session_id,
+                    str(filepath) if filepath else "",
+                    project,
+                    len(messages),
+                    file_size,
+                    session.start_time,
+                    session.end_time,
+                ),
             )
-            # Clear old messages for a clean re-index
             conn.execute(
                 "DELETE FROM messages WHERE session_id = ?", (session_id,)
             )
@@ -123,8 +161,9 @@ class SessionDB:
                 conn.executemany(
                     """INSERT INTO messages
                        (session_id, sequence, role, content, timestamp,
-                        tool_name, token_usage_in, token_usage_out)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tool_name, token_usage_in, token_usage_out,
+                        cache_read_tokens, cache_create_tokens)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     [
                         (
                             session_id,
@@ -135,12 +174,43 @@ class SessionDB:
                             m.get("tool_name"),
                             m.get("token_usage_in", 0),
                             m.get("token_usage_out", 0),
+                            m.get("cache_read_tokens", 0),
+                            m.get("cache_create_tokens", 0),
                         )
                         for idx, m in enumerate(messages)
                     ],
                 )
 
         return {"session_id": session_id, "messages_indexed": len(messages)}
+
+    def install(self) -> dict:
+        """Discover and index all sessions from all available adapters.
+
+        Returns: {"indexed": N, "skipped": N, "total_messages": N}
+        """
+        from ..adapters.claude_code import ClaudeCodeAdapter
+
+        adapter = ClaudeCodeAdapter()
+        session_paths = adapter.discover_sessions()
+
+        indexed = 0
+        skipped = 0
+        total_messages = 0
+
+        for filepath_str in session_paths:
+            filepath = Path(filepath_str)
+            session_id = filepath.stem
+            if self.is_indexed(session_id):
+                skipped += 1
+                continue
+            try:
+                result = self.index_session(filepath)
+                total_messages += result["messages_indexed"]
+                indexed += 1
+            except Exception:
+                pass
+
+        return {"indexed": indexed, "skipped": skipped, "total_messages": total_messages}
 
     def is_indexed(self, session_id: str) -> bool:
         with self._connect() as conn:
@@ -198,6 +268,8 @@ class SessionDB:
                 m.get("tool_name"),
                 m.get("token_usage_in", 0),
                 m.get("token_usage_out", 0),
+                m.get("cache_read_tokens", 0),
+                m.get("cache_create_tokens", 0),
             )
             for i, m in enumerate(messages)
         ]
@@ -206,8 +278,9 @@ class SessionDB:
             conn.executemany(
                 """INSERT OR REPLACE INTO messages
                    (session_id, sequence, role, content, timestamp,
-                    tool_name, token_usage_in, token_usage_out)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    tool_name, token_usage_in, token_usage_out,
+                    cache_read_tokens, cache_create_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
             conn.execute(
@@ -290,8 +363,10 @@ class SessionDB:
             s = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()
             m = conn.execute(
                 """SELECT COUNT(*) AS c,
-                          COALESCE(SUM(token_usage_in), 0)  AS ti,
-                          COALESCE(SUM(token_usage_out), 0) AS to_
+                          COALESCE(SUM(token_usage_in), 0)      AS ti,
+                          COALESCE(SUM(token_usage_out), 0)     AS to_,
+                          COALESCE(SUM(cache_read_tokens), 0)   AS cr,
+                          COALESCE(SUM(cache_create_tokens), 0) AS cc
                    FROM messages"""
             ).fetchone()
 
@@ -301,8 +376,67 @@ class SessionDB:
             "total_messages": m["c"],
             "total_tokens_in": m["ti"],
             "total_tokens_out": m["to_"],
+            "total_cache_read": m["cr"],
+            "total_cache_create": m["cc"],
             "db_size_bytes": db_size,
         }
+
+    # Opus pricing (as of Feb 2026)
+    _COST_PER_M = {
+        "input": 15.0,
+        "output": 75.0,
+        "cache_read": 1.50,
+        "cache_create": 18.75,
+    }
+
+    def session_costs(self, limit: int = 10) -> list[dict]:
+        """Return sessions ranked by estimated cost (descending).
+
+        Cost model: Opus pricing — $15/M input, $75/M output,
+        $1.50/M cache_read, $18.75/M cache_create.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT
+                       m.session_id,
+                       s.project,
+                       s.message_count,
+                       SUM(m.token_usage_in)      AS input_tokens,
+                       SUM(m.token_usage_out)     AS output_tokens,
+                       SUM(m.cache_read_tokens)   AS cache_read,
+                       SUM(m.cache_create_tokens) AS cache_create
+                   FROM messages m
+                   LEFT JOIN sessions s ON s.session_id = m.session_id
+                   GROUP BY m.session_id
+                   ORDER BY (
+                       SUM(m.token_usage_in) * 15.0
+                       + SUM(m.token_usage_out) * 75.0
+                       + SUM(m.cache_read_tokens) * 1.5
+                       + SUM(m.cache_create_tokens) * 18.75
+                   ) DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+
+        results = []
+        for row in rows:
+            cost = (
+                row["input_tokens"] * self._COST_PER_M["input"]
+                + row["output_tokens"] * self._COST_PER_M["output"]
+                + row["cache_read"] * self._COST_PER_M["cache_read"]
+                + row["cache_create"] * self._COST_PER_M["cache_create"]
+            ) / 1_000_000
+            results.append({
+                "session_id": row["session_id"],
+                "project": row["project"],
+                "message_count": row["message_count"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "cache_read_tokens": row["cache_read"],
+                "cache_create_tokens": row["cache_create"],
+                "estimated_cost": round(cost, 2),
+            })
+        return results
 
     # ------------------------------------------------------------------
     # JSONL parsing
