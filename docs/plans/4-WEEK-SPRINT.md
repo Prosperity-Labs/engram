@@ -1,7 +1,7 @@
 # Engram 4-Week Sprint
 
 ## WEEK 1 — Foundation
-- **Day 1 (Today):** AgentAdapter base class, refactor JSONL parser into ClaudeCodeAdapter. Fix engram PATH so it runs from anywhere.
+- **Day 1 [DONE]:** AgentAdapter base class, refactor JSONL parser into ClaudeCodeAdapter. 21 tests passing. Branch: `day1/agent-adapter`.
 - **Day 2:** CursorAdapter — wire Cursor stop hook, sessions appear in engram inspect-list
 - **Day 3:** CodexAdapter — wire Codex notify hook, same
 - **Day 4:** Structured summarization — 5 sections: Intent, Decisions, Errors, Current State, Next Steps

@@ -66,12 +66,19 @@ Not "work on X" — a done/not done binary you check off each night.
 
 > Goal: Multi-agent architecture in place, repo public, Cursor + Claude Code + Codex working
 
-**Day 1 (Thu Feb 20)**
+**Day 1 [DONE] (Thu Feb 20)**
 Outcome: `AgentAdapter` base class + `ClaudeCodeAdapter` refactor
 - Define `EngramSession` dataclass — the normalized format all adapters produce
 - Refactor existing JSONL parser into `ClaudeCodeAdapter(AgentAdapter)`
 - All downstream code (compression, inspector) reads `EngramSession`, not raw JSONL
 - Done when: existing Claude Code sessions still work perfectly through the new layer
+- **Result:** Branch `day1/agent-adapter` — 2 commits, 21 tests passing
+  - `engram/adapters/base.py`: EngramSession, Turn, ToolCall, AgentAdapter ABC
+  - `engram/adapters/claude_code.py`: Full JSONL parser with tool extraction + token counting
+  - `engram/recall/session_db.py`: `index_from_session()` bridge method
+  - `engram/cli.py`: Discovery via adapter
+  - `tests/`: conftest.py fixtures (Claude Code + Codex formats), test_base.py (9), test_claude_code_adapter.py (12)
+  - Discovered Codex JSONL format at `~/.codex/sessions/` (5 sessions) and `~/.codex/history.jsonl` (26 entries)
 
 **Day 2 (Fri Feb 21)**
 Outcome: `CursorAdapter` wired — Cursor sessions flow into Engram

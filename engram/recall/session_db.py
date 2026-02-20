@@ -95,16 +95,35 @@ class SessionDB:
     # ------------------------------------------------------------------
 
     def index_session(self, filepath: Path) -> dict:
-        """Parse an entire JSONL session file, store session + messages."""
-        filepath = Path(filepath)
-        session_id = filepath.stem
-        project = _guess_project(filepath)
-        messages = self._extract_messages(filepath)
+        """Parse a JSONL session file via ClaudeCodeAdapter, store session + messages."""
+        from ..adapters.claude_code import ClaudeCodeAdapter
 
-        stat = filepath.stat()
-        timestamps = [m["timestamp"] for m in messages if m.get("timestamp")]
-        created_at = min(timestamps) if timestamps else None
-        updated_at = max(timestamps) if timestamps else None
+        filepath = Path(filepath)
+        adapter = ClaudeCodeAdapter()
+        session = adapter.parse_file(str(filepath))
+        return self.index_from_session(session, filepath)
+
+    def index_from_session(self, session, filepath: Path | None = None) -> dict:
+        """Index an EngramSession into the database.
+
+        Works with any adapter's output — agent-agnostic.
+        """
+        from ..adapters.base import EngramSession
+
+        session_id = session.session_id
+        project = session.project
+        messages = session.to_message_dicts()
+
+        if filepath is None and session.filepath:
+            filepath = Path(session.filepath)
+
+        file_size = 0
+        if filepath:
+            filepath = Path(filepath)
+            try:
+                file_size = filepath.stat().st_size
+            except OSError:
+                pass
 
         with self._connect() as conn:
             conn.execute(
@@ -112,10 +131,16 @@ class SessionDB:
                    (session_id, filepath, project, message_count,
                     file_size_bytes, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, str(filepath), project, len(messages),
-                 stat.st_size, created_at, updated_at),
+                (
+                    session_id,
+                    str(filepath) if filepath else "",
+                    project,
+                    len(messages),
+                    file_size,
+                    session.start_time,
+                    session.end_time,
+                ),
             )
-            # Clear old messages for a clean re-index
             conn.execute(
                 "DELETE FROM messages WHERE session_id = ?", (session_id,)
             )
