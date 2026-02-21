@@ -111,12 +111,31 @@ def cmd_monitor(args: argparse.Namespace) -> None:
         print(render(snap))
 
 
+def _sanitize_fts_query(raw: str) -> str:
+    """Sanitize user input for FTS5 MATCH queries.
+
+    FTS5 treats characters like -, *, ^, : as operators.
+    Wrap each token in double quotes so they're treated as literals.
+    Preserves user-quoted phrases like "exact match".
+    """
+    import re
+    parts = []
+    for segment in re.split(r'(".*?")', raw):
+        if segment.startswith('"') and segment.endswith('"'):
+            parts.append(segment)
+        else:
+            for tok in segment.split():
+                escaped = tok.replace('"', '""')
+                parts.append(f'"{escaped}"')
+    return " ".join(parts)
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     """Search across all indexed sessions."""
     from .recall.session_db import SessionDB
 
     db = SessionDB()
-    query = " ".join(args.query)
+    query = _sanitize_fts_query(" ".join(args.query))
 
     results = db.search(
         query,
