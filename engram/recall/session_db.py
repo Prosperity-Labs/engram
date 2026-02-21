@@ -232,6 +232,7 @@ class SessionDB:
     def upsert_session_meta(
         self, session_id: str, filepath: str, project: str | None = None
     ) -> None:
+        project = clean_project_name(project) if project else project
         with self._connect() as conn:
             existing = conn.execute(
                 "SELECT message_count FROM sessions WHERE session_id = ?",
@@ -245,6 +246,23 @@ class SessionDB:
                    VALUES (?, ?, ?, ?)""",
                 (session_id, filepath, project, msg_count),
             )
+
+    def clean_all_project_names(self) -> int:
+        """Update all sessions with cleaned project names. Returns count updated."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT session_id, project FROM sessions WHERE project IS NOT NULL"
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                cleaned = clean_project_name(row["project"])
+                if cleaned != row["project"]:
+                    conn.execute(
+                        "UPDATE sessions SET project = ? WHERE session_id = ?",
+                        (cleaned, row["session_id"]),
+                    )
+                    updated += 1
+        return updated
 
     def insert_messages(
         self,
@@ -714,6 +732,39 @@ class SessionDB:
 # Helpers
 # ------------------------------------------------------------------
 
+_PROJECT_BASE_MARKERS = {"development", "desktop", "projects", "plugins", "marketplaces"}
+
+
+def clean_project_name(raw: str) -> str:
+    """Normalize raw Claude project path tokens into readable project names."""
+    if not raw:
+        return raw
+
+    if not raw.startswith("-home-") and not raw.startswith("-"):
+        return raw
+
+    parts = [part for part in raw.strip("-").split("-") if part]
+    if not parts:
+        return raw
+
+    marker_idx = None
+    for idx, part in enumerate(parts):
+        if part.lower() in _PROJECT_BASE_MARKERS:
+            marker_idx = idx
+
+    if marker_idx is None:
+        return raw
+
+    remainder = parts[marker_idx + 1 :]
+    if not remainder:
+        return parts[marker_idx]
+
+    if len(remainder) == 4:
+        return f"{'-'.join(remainder[:2])}/{'-'.join(remainder[2:])}"
+
+    return "-".join(remainder)
+
+
 def _guess_project(filepath: Path) -> str | None:
     """Derive project name from the standard Claude session path layout."""
     # ~/.claude/projects/<project-dir>/<session-id>.jsonl
@@ -721,7 +772,7 @@ def _guess_project(filepath: Path) -> str | None:
     try:
         idx = parts.index("projects")
         if idx + 1 < len(parts) - 1:
-            return parts[idx + 1]
+            return clean_project_name(parts[idx + 1])
     except ValueError:
         pass
     return None
