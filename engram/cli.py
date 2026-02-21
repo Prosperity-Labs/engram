@@ -11,16 +11,8 @@ def _short_project(name: str | None) -> str:
     """Shorten Claude Code project paths to readable names."""
     if not name:
         return "?"
-    # Strip common prefix: -home-user-Desktop-development-
-    parts = name.strip("-").split("-")
-    # Find 'development' or 'Desktop' and take everything after
-    for marker in ("development", "Desktop"):
-        if marker in parts:
-            idx = parts.index(marker)
-            rest = parts[idx + 1:]
-            if rest:
-                return "-".join(rest)
-    return name
+    from .recall.session_db import clean_project_name
+    return clean_project_name(name)
 
 
 def cmd_install(args: argparse.Namespace) -> None:
@@ -298,6 +290,129 @@ def cmd_insights(args: argparse.Namespace) -> None:
             print()
 
 
+def cmd_stats(args: argparse.Namespace) -> None:
+    """Show per-project analytics."""
+    from .recall.session_db import SessionDB
+    from .stats import compute_project_stats, compute_session_stats, render_project_stats
+
+    db = SessionDB()
+
+    if args.session:
+        s = compute_session_stats(db, args.session)
+        print(render_project_stats([s]))
+    else:
+        stats = compute_project_stats(db)
+        if args.project:
+            stats = [s for s in stats if s["project"] == args.project]
+        if not stats:
+            print("No stats found. Run `engram install` first.")
+            return
+        print(render_project_stats(stats))
+
+
+def cmd_sessions(args: argparse.Namespace) -> None:
+    """List sessions with filtering and sorting."""
+    from .recall.session_db import SessionDB
+    from .sessions import list_sessions, render_sessions
+
+    db = SessionDB()
+    sessions = list_sessions(
+        db,
+        project=args.project,
+        min_messages=args.min_messages,
+        sort_by=args.sort,
+        limit=args.limit,
+    )
+
+    if not sessions:
+        print("No sessions found. Run `engram install` first.")
+        return
+
+    print(render_sessions(sessions))
+
+
+def cmd_artifacts(args: argparse.Namespace) -> None:
+    """Extract and query artifacts from indexed sessions."""
+    from .recall.session_db import SessionDB
+    from .recall.artifact_extractor import ArtifactExtractor
+
+    db = SessionDB()
+    extractor = ArtifactExtractor(db)
+
+    if args.extract:
+        result = extractor.extract_all()
+        print(f"Processed {result['sessions_processed']} sessions, extracted {result['artifacts_extracted']} artifacts")
+        return
+
+    if args.session:
+        summary = extractor.summary(args.session)
+        print(f"Session {args.session[:12]}...")
+        print(f"  Files read:    {summary['files_read']}")
+        print(f"  Files written: {summary['files_written']}")
+        print(f"  Files created: {summary['files_created']}")
+        print(f"  Commands:      {summary['commands']}")
+        print(f"  API calls:     {summary['api_calls']}")
+        print(f"  Errors:        {summary['errors']}")
+        if summary['top_files']:
+            print(f"\n  Top files:")
+            for path, count in summary['top_files'][:10]:
+                print(f"    {count:>3}x  {path}")
+        if summary['top_commands']:
+            print(f"\n  Top commands:")
+            for cmd, count in summary['top_commands'][:10]:
+                print(f"    {count:>3}x  {cmd[:80]}")
+        return
+
+    artifacts = extractor.get_artifacts(
+        project=args.project,
+        artifact_type=args.type,
+        limit=args.limit,
+    )
+    if not artifacts:
+        print("No artifacts found. Run `engram artifacts --extract` first.")
+        return
+
+    for a in artifacts:
+        sid = a['session_id'][:8]
+        print(f"  [{sid}..] {a['artifact_type']:<12} {a['target'][:80]}")
+
+
+def cmd_export(args: argparse.Namespace) -> None:
+    """Export session data to JSON or CSV."""
+    from .recall.session_db import SessionDB
+    from .export import export_events, export_sessions
+
+    db = SessionDB()
+
+    if args.sessions_only:
+        result = export_sessions(db, format=args.format, output=args.output)
+    else:
+        result = export_events(
+            db,
+            format=args.format,
+            project=args.project,
+            session_id=args.session,
+            output=args.output,
+        )
+
+    if args.output:
+        print(f"Exported to {args.output}")
+    else:
+        print(result)
+
+
+def cmd_clean_names(args: argparse.Namespace) -> None:
+    """Clean up raw project directory names in the database."""
+    from .recall.session_db import SessionDB
+
+    db = SessionDB()
+    count = db.clean_all_project_names()
+    if count == 0:
+        print("All project names are already clean.")
+    else:
+        print(f"Updated {count} project names.")
+
+
 def cmd_reindex(args: argparse.Namespace) -> None:
     """Re-index all sessions to backfill granular token data."""
     from pathlib import Path
@@ -363,6 +478,42 @@ def main() -> None:
     p_insights = subparsers.add_parser("insights", help="Analytics dashboard across all sessions")
     p_insights.add_argument("--json", action="store_true", help="Output raw JSON instead of formatted text")
     p_insights.set_defaults(func=cmd_insights)
+
+    # stats
+    p_stats = subparsers.add_parser("stats", help="Per-project analytics (tokens, errors, tool usage)")
+    p_stats.add_argument("--project", "-p", help="Filter to a specific project")
+    p_stats.add_argument("--session", "-s", help="Stats for a single session")
+    p_stats.set_defaults(func=cmd_stats)
+
+    # sessions
+    p_sessions = subparsers.add_parser("sessions", help="List sessions with filtering")
+    p_sessions.add_argument("--project", "-p", help="Filter by project name")
+    p_sessions.add_argument("--sort", choices=["recent", "messages", "tokens"], default="recent", help="Sort order (default: recent)")
+    p_sessions.add_argument("--min-messages", type=int, default=0, help="Minimum message count")
+    p_sessions.add_argument("--limit", "-n", type=int, default=20, help="Max results (default: 20)")
+    p_sessions.set_defaults(func=cmd_sessions)
+
+    # artifacts
+    p_artifacts = subparsers.add_parser("artifacts", help="Extract and query tool artifacts")
+    p_artifacts.add_argument("--extract", action="store_true", help="Run extraction on all sessions")
+    p_artifacts.add_argument("--session", "-s", help="Show artifact summary for a session")
+    p_artifacts.add_argument("--project", "-p", help="Filter by project")
+    p_artifacts.add_argument("--type", "-t", choices=["file_read", "file_write", "file_create", "command", "api_call", "error"], help="Filter by artifact type")
+    p_artifacts.add_argument("--limit", "-n", type=int, default=20, help="Max results (default: 20)")
+    p_artifacts.set_defaults(func=cmd_artifacts)
+
+    # export
+    p_export = subparsers.add_parser("export", help="Export data to JSON or CSV")
+    p_export.add_argument("--format", "-f", choices=["json", "csv"], default="json", help="Output format (default: json)")
+    p_export.add_argument("--sessions-only", action="store_true", help="Export session metadata only (no messages)")
+    p_export.add_argument("--project", "-p", help="Filter by project")
+    p_export.add_argument("--session", "-s", help="Filter to a single session")
+    p_export.add_argument("--output", "-o", help="Write to file instead of stdout")
+    p_export.set_defaults(func=cmd_export)
+
+    # clean-names
+    p_clean = subparsers.add_parser("clean-names", help="Clean up raw project directory names")
+    p_clean.set_defaults(func=cmd_clean_names)
 
     # reindex
     p_reindex = subparsers.add_parser("reindex", help="Re-index all sessions (backfills granular token data)")

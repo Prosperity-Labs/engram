@@ -732,11 +732,31 @@ class SessionDB:
 # Helpers
 # ------------------------------------------------------------------
 
-_PROJECT_BASE_MARKERS = {"development", "desktop", "projects", "plugins", "marketplaces"}
+_PROJECT_BASE_MARKERS = {"development", "desktop", "projects", "plugins", "marketplaces",
+                         "worktrees"}
 
 
 def clean_project_name(raw: str) -> str:
-    """Normalize raw Claude project path tokens into readable project names."""
+    """Normalize raw Claude project path tokens into readable project names.
+
+    Claude encodes project dirs by replacing ``/`` and ``.`` with ``-``.
+    We strip the home-directory prefix (up to the last known base-dir
+    marker like "development") and then try to recover the original
+    ``parent/child`` structure by probing the filesystem.
+
+    When the filesystem is unavailable (e.g. different machine), the
+    function still strips the prefix and returns the flat hyphenated name
+    which is always an improvement over the raw encoded path.
+
+    Examples::
+
+        "-home-user-Desktop-development-monra-app"            -> "monra-app"
+        "-home-user-Desktop-development-monra-app-monra-core" -> "monra-app/monra-core"  (if dir exists)
+        "-home-user-Desktop-development-monra-app-monra-core" -> "monra-app-monra-core"  (if no filesystem)
+        "-home-user-Desktop-development-music-nft-platform"   -> "music-nft-platform"
+        "-home-user-Desktop-development"                      -> "development"
+        "app"                                                  -> "app"
+    """
     if not raw:
         return raw
 
@@ -747,6 +767,7 @@ def clean_project_name(raw: str) -> str:
     if not parts:
         return raw
 
+    # Find last base-directory marker
     marker_idx = None
     for idx, part in enumerate(parts):
         if part.lower() in _PROJECT_BASE_MARKERS:
@@ -755,14 +776,36 @@ def clean_project_name(raw: str) -> str:
     if marker_idx is None:
         return raw
 
-    remainder = parts[marker_idx + 1 :]
+    remainder = parts[marker_idx + 1:]
     if not remainder:
         return parts[marker_idx]
 
-    if len(remainder) == 4:
-        return f"{'-'.join(remainder[:2])}/{'-'.join(remainder[2:])}"
+    # Reconstruct the path segment after the marker.  Try to find the
+    # longest prefix that matches an actual directory on disk so we can
+    # split ``monra-app-monra-core`` into ``monra-app/monra-core``.
+    flat = "-".join(remainder)
 
-    return "-".join(remainder)
+    # Build the parent directory from everything up to and including the
+    # marker (e.g. /home/prosperitylabs/Desktop/development).
+    parent = Path("/") / "/".join(parts[: marker_idx + 1])
+
+    if parent.is_dir():
+        # Greedily match the longest directory name.
+        # Claude also encodes dots as hyphens (monra.app -> monra-app),
+        # so try both the hyphenated name and dot variants.
+        for length in range(len(remainder), 0, -1):
+            candidate = "-".join(remainder[:length])
+            candidates = [candidate, candidate.replace("-", "."), candidate.replace("-", ".", 1)]
+            for name in candidates:
+                if (parent / name).is_dir():
+                    rest = remainder[length:]
+                    if rest:
+                        return f"{candidate}/{'-'.join(rest)}"
+                    return candidate
+                    break
+
+    # Filesystem unavailable or no match — return flat
+    return flat
 
 
 def _guess_project(filepath: Path) -> str | None:

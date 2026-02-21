@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from engram.recall.session_db import SessionDB
+from engram.stats import _fmt_int, _fmt_tokens
 
 
 def list_sessions(
@@ -73,19 +74,6 @@ def list_sessions(
         }
         for row in rows
     ]
-
-
-def _fmt_int(value: int | None) -> str:
-    return f"{int(value or 0):,}"
-
-
-def _fmt_tokens(value: int | None) -> str:
-    val = int(value or 0)
-    if val >= 1_000_000:
-        return f"{val / 1_000_000:.1f}M"
-    if val >= 1_000:
-        return f"{val / 1_000:.1f}K"
-    return str(val)
 
 
 def _fmt_updated(value: str | None) -> str:
