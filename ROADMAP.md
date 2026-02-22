@@ -46,6 +46,43 @@
 
 ---
 
+## Next (v0.4.0) — Two-Layer Context Injection
+
+> The problem with injecting everything into CLAUDE.md: it's read at session start and consumes context window immediately. For short sessions or simple tasks, that's pure waste. The brief was designed to be curated (500-2000 tokens), but even that is blunt — same content regardless of what the session is about.
+>
+> The fix: split static background knowledge from just-in-time file context.
+
+### Layer 1: Slim CLAUDE.md (<500 tokens)
+- [ ] Trim `generate_brief()` output to only dangerous knowledge:
+  - Co-change clusters (the 5 files that always break together)
+  - High error-ratio files (endpoints.ts: 40:1 error/write across 15 sessions)
+  - Load-bearing architecture decisions (the ones that keep causing regressions)
+- [ ] `engram brief --slim` flag for the compact output
+- [ ] Always-on background knowledge — worth the token cost every session
+
+### Layer 2: PreToolUse Hook — Just-in-Time Injection
+- [ ] Claude Code hook: fires before Read/Edit tool calls
+- [ ] Queries artifacts table by file path being touched
+- [ ] Injects one-liner context when the agent is about to touch a file with history:
+  ```
+  # endpoints.ts — 40:1 error/write ratio, 15 sessions. Last error: "CORS header missing" (2026-02-19)
+  ```
+- [ ] ~20 tokens per injection, zero cost when file has no history
+- [ ] New module: `engram/hooks.py` — hook handler + artifact lookup
+- [ ] `engram hooks install` — writes Claude Code hook config to `~/.claude/hooks.json`
+
+### Data layer (already exists)
+- `_key_files()` → data source for Layer 1
+- `_common_errors()` → data source for Layer 1
+- artifacts table → data source for Layer 2 file lookups
+- No new schema needed — just new query patterns on existing tables
+
+### Benchmark: Hook Effectiveness
+- [ ] New benchmark: of files the agent re-reads, how many had prior history available?
+- [ ] Measure: does the hook reduce re-reads in subsequent sessions?
+
+---
+
 ## Phase 3 — Model-Agnostic Loop Instrumentation
 
 > Every agent — Claude Code, OpenCode, Codex, Cursor, any open source agent — runs the same loop: **Think → Act → Observe → Repeat**. There are no forking DAGs. There is no complex orchestration graph. It's a flat loop, and the only place to instrument it without disrupting the agent is at the **Observe** step — after the tool runs, before the next Think.
@@ -120,6 +157,28 @@ engram artifacts --recent 7d
 **Build after:** v0.2.0. Data already exists in indexed messages — just needs extraction.
 
 See: [docs/research/compression-and-memory-landscape.md](docs/research/compression-and-memory-landscape.md)
+
+---
+
+### Replay Engine (Phase 2 — deterministic replay & experience extraction)
+
+Record agent execution traces, reconstruct execution trees, and replay from any fork point with modified context. Academic validation (AgentRR, arxiv 2505.17716) confirms multi-level experience abstraction from recorded traces. Market validation from Vellum/Rely Health shows 100x issue resolution improvement in production healthcare agents.
+
+**Engram's advantage:** Claude Code already writes full execution traces to JSONL — no SDK instrumentation required. The record layer is done; replay and experience abstraction are what's left.
+
+**Why it matters beyond debugging:** Deterministic replay is a governance and compliance primitive, not just a developer tool. Enterprise buyers need post-incident forensics and operational assurance for AI agents.
+
+**Requirements (sequential):**
+1. ~~Artifact manifest~~ (being built now)
+2. ~~Session JSONL parsing~~ (done)
+3. Execution tree reconstruction from artifact sequence
+4. Fork point UI — select any node, branch from there
+5. Context injection at fork point
+6. Parallel run comparison (same task, different model/context)
+
+**Build after:** v0.3.0 benchmarks prove value; artifact manifest is solid.
+
+See: [docs/research/replay-engine-market-validation.md](docs/research/replay-engine-market-validation.md)
 
 ---
 
