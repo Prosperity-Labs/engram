@@ -440,7 +440,7 @@ def cmd_brief(args: argparse.Namespace) -> None:
             print("No projects found. Run `engram install` first.")
             return
 
-    result = generate_brief(db, project=project, format=args.format)
+    result = generate_brief(db, project=project, format=args.format, slim=args.slim)
 
     if args.output:
         from pathlib import Path
@@ -448,6 +448,32 @@ def cmd_brief(args: argparse.Namespace) -> None:
         print(f"Brief written to {args.output}")
     else:
         print(result)
+
+
+def cmd_hooks_install(args: argparse.Namespace) -> None:
+    """Install Engram PreToolUse hook into Claude Code settings."""
+    from .hooks import install_hook
+
+    scope = "project" if args.project else "global"
+    result = install_hook(scope=scope)
+    print(result)
+
+
+def cmd_hook_handle(args: argparse.Namespace) -> None:
+    """Handle a PreToolUse hook call from Claude Code (reads JSON from stdin)."""
+    from .hooks import handle_pretool_hook
+
+    try:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return
+        stdin_json = json.loads(raw)
+    except (json.JSONDecodeError, Exception):
+        return
+
+    result = handle_pretool_hook(stdin_json)
+    if result:
+        print(json.dumps(result))
 
 
 def cmd_reindex(args: argparse.Namespace) -> None:
@@ -561,8 +587,23 @@ def main() -> None:
     p_brief.add_argument("--project", "-p", help="Project name (auto-detects if omitted)")
     p_brief.add_argument("--format", "-f", choices=["markdown", "json"], default="markdown",
                           help="Output format (default: markdown)")
+    p_brief.add_argument("--slim", action="store_true",
+                          help="Generate compact brief (<500 tokens) with only dangerous knowledge")
     p_brief.add_argument("--output", "-o", help="Write to file instead of stdout")
     p_brief.set_defaults(func=cmd_brief)
+
+    # hooks install
+    p_hooks = subparsers.add_parser("hooks", help="Manage Claude Code hooks")
+    hooks_sub = p_hooks.add_subparsers(dest="hooks_command")
+    p_hooks_install = hooks_sub.add_parser("install", help="Install Engram PreToolUse hook")
+    p_hooks_install.add_argument("--project", action="store_true",
+                                  help="Install to .claude/settings.json (project scope) instead of global")
+    p_hooks_install.set_defaults(func=cmd_hooks_install)
+    p_hooks.set_defaults(func=lambda args: p_hooks.print_help())
+
+    # hook-handle (hidden — called by the shell script)
+    p_hook_handle = subparsers.add_parser("hook-handle", help=argparse.SUPPRESS)
+    p_hook_handle.set_defaults(func=cmd_hook_handle)
 
     args = parser.parse_args()
     if not args.command:

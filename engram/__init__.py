@@ -11,7 +11,7 @@ Usage:
     stats = idx.stats()                    # DB stats
 """
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 
 from engram.recall.session_db import SessionDB as SessionIndexer
 

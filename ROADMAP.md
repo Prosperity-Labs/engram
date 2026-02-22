@@ -46,36 +46,47 @@
 
 ---
 
-## Next (v0.4.0) — Two-Layer Context Injection
+## Shipped (v0.4.0) — Two-Layer Context Injection
 
 > The problem with injecting everything into CLAUDE.md: it's read at session start and consumes context window immediately. For short sessions or simple tasks, that's pure waste. The brief was designed to be curated (500-2000 tokens), but even that is blunt — same content regardless of what the session is about.
 >
 > The fix: split static background knowledge from just-in-time file context.
 
 ### Layer 1: Slim CLAUDE.md (<500 tokens)
-- [ ] Trim `generate_brief()` output to only dangerous knowledge:
+- [x] Trim `generate_brief()` output to only dangerous knowledge:
   - Co-change clusters (the 5 files that always break together)
   - High error-ratio files (endpoints.ts: 40:1 error/write across 15 sessions)
   - Load-bearing architecture decisions (the ones that keep causing regressions)
-- [ ] `engram brief --slim` flag for the compact output
-- [ ] Always-on background knowledge — worth the token cost every session
+- [x] `engram brief --slim` flag for the compact output
+- [x] Always-on background knowledge — worth the token cost every session
 
 ### Layer 2: PreToolUse Hook — Just-in-Time Injection
-- [ ] Claude Code hook: fires before Read/Edit tool calls
-- [ ] Queries artifacts table by file path being touched
-- [ ] Injects one-liner context when the agent is about to touch a file with history:
+- [x] Claude Code hook: fires before Read/Edit tool calls
+- [x] Queries artifacts table by file path being touched
+- [x] Injects one-liner context when the agent is about to touch a file with history:
   ```
   # endpoints.ts — 40:1 error/write ratio, 15 sessions. Last error: "CORS header missing" (2026-02-19)
   ```
-- [ ] ~20 tokens per injection, zero cost when file has no history
-- [ ] New module: `engram/hooks.py` — hook handler + artifact lookup
-- [ ] `engram hooks install` — writes Claude Code hook config to `~/.claude/hooks.json`
+- [x] ~20 tokens per injection, zero cost when file has no history
+- [x] New module: `engram/hooks.py` — hook handler + artifact lookup
+- [x] `engram hooks install` — writes Claude Code hook config to `~/.claude/settings.json`
 
 ### Data layer (already exists)
 - `_key_files()` → data source for Layer 1
 - `_common_errors()` → data source for Layer 1
 - artifacts table → data source for Layer 2 file lookups
 - No new schema needed — just new query patterns on existing tables
+
+### Known Bugs
+- [x] ~~Slim brief "Danger Zones" shows raw JSON instead of file paths~~ — fixed by correlating errors to files via session co-occurrence instead of matching error targets directly.
+- [ ] **Recurring Errors section shows raw JSON tool_use content.** Root cause: `ArtifactExtractor` stores `content[:200]` as `error.target` instead of extracting the actual error message. Fix belongs in `artifact_extractor.py`.
+
+### Improvements Needed
+- [ ] **Key Decisions pulls noise instead of real architecture decisions.** `_architecture_patterns()` uses keyword search ("chose", "decided", "because") which matches user messages, system prompts, and plan mode boilerplate. Needs: (a) filter to `role=assistant` only, (b) minimum content length, (c) exclude known boilerplate patterns like "Entered plan mode", "/compact".
+- [ ] **Slim brief filenames lose context.** `handlers.ts` appears in both monra-core and api-gateway. Short names are compact but ambiguous when a project has multiple services. Consider showing `flow-service/.../handlers.ts` or at least the parent dir.
+- [ ] **Danger zone ratios are inflated.** 78:1 error/write means 78 errors happened in the same *session* as 1 write — not 78 errors *caused by* that file. The session-level correlation overestimates danger for files edited in error-heavy sessions. Consider narrowing to errors within N sequence numbers of the write.
+- [ ] **Full brief paths should also be shortened.** Full absolute paths waste tokens. Apply the same `Path.name` or relative-path treatment as slim brief.
+- [ ] **`last_session_summary()` shows engram's own files.** The last monra-app session was actually an engram session that happened to be grouped under monra-app. Need project filtering that's more precise.
 
 ### Benchmark: Hook Effectiveness
 - [ ] New benchmark: of files the agent re-reads, how many had prior history available?

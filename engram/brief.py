@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 
 from engram.recall.session_db import SessionDB
 from engram.stats import compute_project_stats
@@ -197,12 +198,143 @@ def _cost_profile(db: SessionDB, project: str) -> dict:
     }
 
 
+def _dangerous_files(db: SessionDB, project: str) -> list[dict]:
+    """Find files with high error-to-write ratios — the most dangerous files.
+
+    Error artifacts store message content as their target (not file paths),
+    so we correlate by session: files written in sessions that also had errors.
+    """
+    sql = """
+    SELECT w.target as path,
+           COUNT(DISTINCT w.id) as writes,
+           COUNT(DISTINCT e.id) as errors,
+           COUNT(DISTINCT w.session_id) as sessions
+    FROM artifacts w
+    JOIN sessions s ON s.session_id = w.session_id
+    LEFT JOIN artifacts e ON e.session_id = w.session_id
+                          AND e.artifact_type = 'error'
+    WHERE s.project = ?
+      AND w.artifact_type IN ('file_write', 'file_create')
+    GROUP BY w.target
+    HAVING errors > 0
+    ORDER BY CAST(errors AS FLOAT) / MAX(writes, 1) DESC
+    LIMIT 5
+    """
+    with db._connect() as conn:
+        rows = conn.execute(sql, (project,)).fetchall()
+
+    return [
+        {
+            "path": row["path"],
+            "errors": int(row["errors"] or 0),
+            "writes": int(row["writes"] or 0),
+            "sessions": int(row["sessions"] or 0),
+            "ratio": f"{int(row['errors'] or 0)}:{max(int(row['writes'] or 0), 1)}",
+        }
+        for row in rows
+    ]
+
+
+def _co_change_clusters(db: SessionDB, project: str) -> list[list[str]]:
+    """Find files that are frequently modified together in the same session."""
+    sql = """
+    SELECT a1.target as file_a, a2.target as file_b,
+           COUNT(DISTINCT a1.session_id) as co_sessions
+    FROM artifacts a1
+    JOIN artifacts a2 ON a1.session_id = a2.session_id AND a1.target < a2.target
+    JOIN sessions s ON s.session_id = a1.session_id
+    WHERE s.project = ?
+      AND a1.artifact_type IN ('file_write', 'file_create')
+      AND a2.artifact_type IN ('file_write', 'file_create')
+    GROUP BY a1.target, a2.target
+    HAVING co_sessions >= 2
+    ORDER BY co_sessions DESC
+    LIMIT 5
+    """
+    with db._connect() as conn:
+        rows = conn.execute(sql, (project,)).fetchall()
+
+    clusters = []
+    for row in rows:
+        clusters.append([row["file_a"], row["file_b"]])
+    return clusters
+
+
+def generate_slim_brief(
+    db: SessionDB,
+    project: str,
+) -> str:
+    """Generate a compact brief (<500 tokens) that reduces warmup exploration.
+
+    Addresses the warmup tax: 76% of first 10 messages are pure exploration.
+    Tells the agent where things are and what happened last, not just what's dangerous.
+
+    Sections:
+    1. Last session — continuation context
+    2. Key files — most-edited files so agent doesn't re-discover them
+    3. Danger zones — files with high error ratios
+    4. Co-change clusters — files that break together
+    5. Architecture decisions — load-bearing choices
+    """
+    from engram.hooks import last_session_summary
+
+    key_files = _key_files(db, project)
+    dangerous = _dangerous_files(db, project)
+    clusters = _co_change_clusters(db, project)
+    arch = _architecture_patterns(db, project)
+    last_session = last_session_summary(db, project)
+
+    lines = [f"# {project} — Engram Brief"]
+
+    # Last session — so agent can continue where the previous one left off
+    if last_session:
+        lines.append("")
+        lines.append(f"> {last_session}")
+
+    # Key files — reduces discovery exploration
+    if key_files["most_modified"]:
+        lines.append("")
+        lines.append("## Key Files")
+        for f in key_files["most_modified"][:5]:
+            short = Path(f["path"]).name
+            lines.append(f"- `{short}` — {f['count']} edits, {f['sessions']} sessions")
+
+    # Danger zones — files that tend to cause errors
+    if dangerous:
+        lines.append("")
+        lines.append("## Danger Zones")
+        for f in dangerous[:3]:
+            short = Path(f['path']).name
+            lines.append(f"- `{short}` — {f['ratio']} error/write, {f['sessions']} sessions")
+
+    # Co-change clusters — files that should be edited together
+    if clusters:
+        lines.append("")
+        lines.append("## Co-Change Clusters")
+        for cluster in clusters[:3]:
+            names = [Path(p).name for p in cluster]
+            lines.append(f"- {' + '.join(f'`{n}`' for n in names)}")
+
+    # Architecture decisions — load-bearing choices
+    if arch:
+        lines.append("")
+        lines.append("## Key Decisions")
+        for item in arch[:3]:
+            snippet = item["snippet"][:120].replace("\n", " ")
+            lines.append(f"- {snippet}")
+
+    return "\n".join(lines)
+
+
 def generate_brief(
     db: SessionDB,
     project: str,
     format: str = "markdown",
+    slim: bool = False,
 ) -> str:
     """Orchestrate all data-gathering functions and produce the brief."""
+    if slim:
+        return generate_slim_brief(db, project)
     overview = _project_overview(db, project)
     key_files = _key_files(db, project)
     architecture_patterns = _architecture_patterns(db, project)
