@@ -1,8 +1,8 @@
 # Engram Roadmap
 
-> **Last Updated:** 2026-02-19
+> **Last Updated:** 2026-02-22
 
-## Current (v0.1.0)
+## Shipped (v0.1.0)
 
 - [x] SQLite session store with FTS5 full-text search
 - [x] LiveIndexer — incremental JSONL polling with byte-offset tracking
@@ -11,12 +11,59 @@
 - [x] `engram search` — ranked search with highlighted snippets
 - [x] `engram monitor --watch` — live dashboard
 
-## Next (v0.2.0)
+## Shipped (v0.2.0)
 
-- [ ] Clean project name parsing (strip `-home-prosperitylabs-Desktop-...` prefixes)
-- [ ] `engram stats` — per-project analytics (token cost, error rate, tool usage)
-- [ ] `engram sessions` — list sessions with filtering by project, date, size
-- [ ] Export to JSON/CSV for external analysis
+- [x] Clean project name parsing (filesystem-aware, dot-encoding support)
+- [x] `engram stats` — per-project analytics (token cost, error rate, tool usage)
+- [x] `engram sessions` — list sessions with filtering by project, date, size
+- [x] Export to JSON/CSV for external analysis
+- [x] `engram artifacts --extract` — artifact extraction from tool calls
+- [x] `engram clean-names` — batch project name normalization
+- [x] `engram reindex` — full reindex command
+- [x] 3 agent adapters: Claude Code, Codex, Cursor
+- [x] FTS5 query sanitizer for special characters
+- [x] 70 tests, 11 CLI commands
+
+## Next (v0.3.0) — `engram brief` + Benchmarks
+
+> Day 6 proper implementation: structured, token-efficient session injection.
+> Dependency: artifacts table (Day 5) — shipped in v0.2.0.
+
+### `engram brief` — Session-Start Context Injection
+- [ ] `engram/brief.py` — 5 data-gathering functions + orchestrator
+  - `_project_overview()` — session count, messages, tokens, cost, date range
+  - `_key_files()` — most-read + most-modified files from artifacts table
+  - `_architecture_patterns()` — FTS5 search for decision keywords
+  - `_common_errors()` — recurring errors grouped from artifacts
+  - `_cost_profile()` — exploration/mutation/execution % with recommendations
+  - `generate_brief()` — assembles markdown or JSON (target: 500-2000 tokens)
+- [ ] CLI: `engram brief --project <name> [--format json] [--output CLAUDE.md]`
+- [ ] Tests: `tests/test_brief.py`
+
+### Benchmarks (4 metrics)
+- [ ] Token Savings — % of file reads the brief would preempt (target: >50%)
+- [ ] Artifact Completeness — % of tool calls captured by extractor (target: >80%)
+- [ ] Search Precision — FTS5 precision@5 against ground truth (target: >70%)
+- [ ] Context Recovery — can Engram data answer project questions? (target: >60%)
+- [ ] Benchmark runner: `benchmark/run_benchmarks.py`
+
+### Delegation
+- **Codex:** `brief.py`, `test_brief.py`, artifact + search benchmarks → `docs/plans/v030-codex-spec.md`
+- **Cursor:** CLI wiring, token + recovery benchmarks, benchmark runner → `docs/plans/v030-cursor-spec.md`
+- **Claude Code:** Specs, review, integration test, version bump
+
+### Remaining v0.3.0
+- [ ] Artifact Trail Index — structured artifact tracking that survives compression
+- [ ] Cost Intelligence Recommendations — detect wasted exploration tokens
+
+---
+
+## Phase 3 — Model-Agnostic Loop Instrumentation
+
+- [ ] Instrument the TAOR loop across any agent runtime
+- [ ] Hook into Think-Act-Observe-Repeat at the Observe step — not forking DAGs (they don't exist)
+- [ ] Support across Claude Code, OpenCode, and any open source agent
+- [ ] Engram becomes the universal Observe layer
 
 ---
 

@@ -48,15 +48,30 @@ class ArtifactExtractor:
             params = match.group(2)
             parsed = {}
             for key, val in _PARAM_RE.findall(params):
-                parsed[key] = val.strip()
+                val = val.strip()
+                if val != "…":
+                    parsed[key] = val
             return parsed
 
+        # Try JSON first
         try:
             value = json.loads(content)
-        except json.JSONDecodeError:
-            return {}
+            if isinstance(value, dict):
+                return value
+        except (json.JSONDecodeError, ValueError):
+            pass
 
-        return value if isinstance(value, dict) else {}
+        # Try Python dict literals (single-quoted dicts from Claude Code adapter)
+        if content.startswith("{"):
+            import ast
+            try:
+                value = ast.literal_eval(content)
+                if isinstance(value, dict):
+                    return value
+            except (ValueError, SyntaxError):
+                pass
+
+        return {}
 
     def _target_from_message(self, tool_name: str, parsed: dict) -> str | None:
         if tool_name == "Read":
