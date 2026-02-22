@@ -1,5 +1,7 @@
 # Engram
 
+*engram (noun) — the physical trace a memory leaves in the brain.*
+
 Knowledge base for Claude Code sessions. Index, search, and monitor your AI agent sessions in real-time.
 
 ## Install

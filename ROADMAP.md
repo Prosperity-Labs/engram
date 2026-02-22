@@ -92,6 +92,11 @@
 - [ ] New benchmark: of files the agent re-reads, how many had prior history available?
 - [ ] Measure: does the hook reduce re-reads in subsequent sessions?
 
+### Auto-Indexing
+- [ ] `engram install` must be run manually before hooks have data — UX gap
+- [ ] Options: SessionStart hook runs `engram install`, lazy index in pretool.sh, background daemon
+- [ ] Goal: zero-setup — install hooks once, everything stays fresh automatically
+
 ---
 
 ## Phase 3 — Model-Agnostic Loop Instrumentation
