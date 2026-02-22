@@ -60,10 +60,40 @@
 
 ## Phase 3 — Model-Agnostic Loop Instrumentation
 
-- [ ] Instrument the TAOR loop across any agent runtime
-- [ ] Hook into Think-Act-Observe-Repeat at the Observe step — not forking DAGs (they don't exist)
-- [ ] Support across Claude Code, OpenCode, and any open source agent
-- [ ] Engram becomes the universal Observe layer
+> Every agent — Claude Code, OpenCode, Codex, Cursor, any open source agent — runs the same loop: **Think → Act → Observe → Repeat**. There are no forking DAGs. There is no complex orchestration graph. It's a flat loop, and the only place to instrument it without disrupting the agent is at the **Observe** step — after the tool runs, before the next Think.
+
+Engram becomes the universal Observe layer.
+
+### The TAOR Loop
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────────────┐     ┌──────────┐
+│  Think   │────▶│   Act    │────▶│     Observe      │────▶│  Repeat  │
+│ (reason) │     │ (tool)   │     │ (Engram hooks in │     │ (next    │
+│          │     │          │     │  here — indexes,  │     │  turn)   │
+│          │     │          │     │  tracks, enriches)│     │          │
+└──────────┘     └──────────┘     └──────────────────┘     └──────────┘
+```
+
+### What "hooking at Observe" means
+- [ ] Intercept tool results before they flow back into the agent's context
+- [ ] Index artifacts (files touched, commands run, errors hit) in real-time
+- [ ] Inject relevant prior knowledge when the agent is about to re-discover something
+- [ ] Track what the agent *actually did* vs what it *intended* — across compression boundaries
+
+### Why the runtime isn't a DAG (but the knowledge model can be)
+Agent runtimes don't fork into parallel execution graphs. Even "multi-agent" setups (Codex + Cursor + Claude Code on the same feature) are independent TAOR loops that happen to share a filesystem. The coordination layer is git, not a DAG scheduler. Engram instruments each loop independently.
+
+However, the **knowledge extracted** from observing these loops *does* form a graph — decisions that led to errors, files that triggered test failures, architecture choices that constrained later sessions. The runtime is a flat loop; the memory built from it is a DAG of causality and context.
+
+### Runtime adapters
+- [ ] Claude Code — JSONL session log polling (shipped in v0.1.0, the foundation)
+- [ ] OpenCode — adapter for its session format
+- [ ] Codex — adapter (started in v0.2.0)
+- [ ] Cursor — `.specstory` adapter (started in v0.2.0, hooks not wired yet)
+- [ ] Generic agent — stdin/stdout hook for any TAOR loop that emits tool calls
+
+### Build after: v0.3.0 benchmarks prove the value of session memory.
 
 ---
 
