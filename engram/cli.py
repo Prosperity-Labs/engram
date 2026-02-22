@@ -86,6 +86,13 @@ def cmd_install(args: argparse.Namespace) -> None:
 
     print(f"\nDone: {indexed} sessions indexed ({total_messages} messages), {skipped} already indexed")
 
+    # Auto-extract artifacts so hooks have data to work with
+    from .recall.artifact_extractor import ArtifactExtractor
+    extractor = ArtifactExtractor(db)
+    print("\nExtracting artifacts...")
+    result = extractor.extract_all()
+    print(f"Artifacts: {result['artifacts_extracted']} extracted from {result['sessions_processed']} sessions")
+
     stats = db.stats()
     print(f"\nKnowledge base: {stats['total_sessions']} sessions, {stats['total_messages']} messages, {stats['db_size_bytes'] / 1024:.0f} KB")
 
