@@ -135,15 +135,17 @@ However, the **knowledge extracted** from observing these loops *does* form a gr
 
 ## Future Features
 
-### Artifact Trail Index (high priority — unsolved industry problem)
+### Artifact Trail Index (mostly shipped — v0.2.0 + v0.4.0)
 
 Maintain a separate artifact index that survives compression. Factory.ai's benchmark shows artifact tracking scores 2.45/5 even for SOTA — this is the gap Engram can fill.
 
+**Status:** Core shipped. Schema, extractor, CLI commands, and hook queries all working. Remaining: time-based filtering (`--recent 7d`), error target cleanup, error-to-fix resolution linking.
+
 **What it tracks:**
-- Files read/written/created (extracted from Read, Edit, Write, Glob tool calls)
-- Commands executed (Bash tool calls)
-- API calls made (MCP tools, curl commands)
-- Errors encountered and their resolution status
+- [x] Files read/written/created (extracted from Read, Edit, Write, Glob tool calls)
+- [x] Commands executed (Bash tool calls)
+- [x] API calls made (MCP tools, curl commands)
+- [ ] Errors encountered and their resolution status (extraction works, but targets store raw JSON — needs cleanup)
 
 **Schema:**
 ```sql
@@ -225,7 +227,9 @@ See: [docs/research/compression-and-memory-landscape.md](docs/research/compressi
 
 ---
 
-### Cost Intelligence Recommendations
+### Cost Intelligence Recommendations (partially shipped — v0.2.0 + v0.3.0)
+
+**Status:** Exploration/mutation/execution ratios shipped in `_cost_profile()` (v0.3.0) and `engram stats` (v0.2.0). >30% exploration warning shipped in full brief. Remaining: dedicated `engram cost` commands with per-session recommendations.
 
 When Engram detects >30% of session tokens spent on file exploration (glob, grep, read patterns), recommend retrieval layer integration (e.g. Noodlebox/MCP).
 
