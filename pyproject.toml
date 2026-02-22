@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "engram"
-version = "0.2.0"
-description = "Knowledge base for Claude Code sessions — index, search, and monitor your AI agent sessions"
+version = "0.3.0"
+description = "Knowledge base for AI coding sessions — index, search, brief, and benchmark your agent workflows"
 requires-python = ">=3.10"
 license = "MIT"
 

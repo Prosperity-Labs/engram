@@ -413,6 +413,43 @@ def cmd_clean_names(args: argparse.Namespace) -> None:
         print(f"Updated {count} project names.")
 
 
+def cmd_brief(args: argparse.Namespace) -> None:
+    """Generate a project brief from session history."""
+    from .recall.session_db import SessionDB
+    from .brief import generate_brief
+
+    db = SessionDB()
+
+    project = args.project
+    if not project:
+        with db._connect() as conn:
+            projects = [
+                row["project"]
+                for row in conn.execute(
+                    """SELECT project, COUNT(*) as cnt
+                       FROM sessions
+                       WHERE project IS NOT NULL
+                       GROUP BY project
+                       ORDER BY cnt DESC
+                       LIMIT 1"""
+                ).fetchall()
+            ]
+        if projects:
+            project = projects[0]
+        else:
+            print("No projects found. Run `engram install` first.")
+            return
+
+    result = generate_brief(db, project=project, format=args.format)
+
+    if args.output:
+        from pathlib import Path
+        Path(args.output).write_text(result)
+        print(f"Brief written to {args.output}")
+    else:
+        print(result)
+
+
 def cmd_reindex(args: argparse.Namespace) -> None:
     """Re-index all sessions to backfill granular token data."""
     from pathlib import Path
@@ -518,6 +555,14 @@ def main() -> None:
     # reindex
     p_reindex = subparsers.add_parser("reindex", help="Re-index all sessions (backfills granular token data)")
     p_reindex.set_defaults(func=cmd_reindex)
+
+    # brief
+    p_brief = subparsers.add_parser("brief", help="Generate project brief from session history")
+    p_brief.add_argument("--project", "-p", help="Project name (auto-detects if omitted)")
+    p_brief.add_argument("--format", "-f", choices=["markdown", "json"], default="markdown",
+                          help="Output format (default: markdown)")
+    p_brief.add_argument("--output", "-o", help="Write to file instead of stdout")
+    p_brief.set_defaults(func=cmd_brief)
 
     args = parser.parse_args()
     if not args.command:
