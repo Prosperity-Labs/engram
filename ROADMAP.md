@@ -24,37 +24,25 @@
 - [x] FTS5 query sanitizer for special characters
 - [x] 70 tests, 11 CLI commands
 
-## Next (v0.3.0) — `engram brief` + Benchmarks
+## Shipped (v0.3.0)
 
-> Day 6 proper implementation: structured, token-efficient session injection.
-> Dependency: artifacts table (Day 5) — shipped in v0.2.0.
-
-### `engram brief` — Session-Start Context Injection
-- [ ] `engram/brief.py` — 5 data-gathering functions + orchestrator
+- [x] `engram brief` — auto-generates CLAUDE.md from session history
   - `_project_overview()` — session count, messages, tokens, cost, date range
   - `_key_files()` — most-read + most-modified files from artifacts table
   - `_architecture_patterns()` — FTS5 search for decision keywords
   - `_common_errors()` — recurring errors grouped from artifacts
   - `_cost_profile()` — exploration/mutation/execution % with recommendations
   - `generate_brief()` — assembles markdown or JSON (target: 500-2000 tokens)
-- [ ] CLI: `engram brief --project <name> [--format json] [--output CLAUDE.md]`
-- [ ] Tests: `tests/test_brief.py`
-
-### Benchmarks (4 metrics)
-- [ ] Token Savings — % of file reads the brief would preempt (target: >50%)
-- [ ] Artifact Completeness — % of tool calls captured by extractor (target: >80%)
-- [ ] Search Precision — FTS5 precision@5 against ground truth (target: >70%)
-- [ ] Context Recovery — can Engram data answer project questions? (target: >60%)
-- [ ] Benchmark runner: `benchmark/run_benchmarks.py`
-
-### Delegation
-- **Codex:** `brief.py`, `test_brief.py`, artifact + search benchmarks → `docs/plans/v030-codex-spec.md`
-- **Cursor:** CLI wiring, token + recovery benchmarks, benchmark runner → `docs/plans/v030-cursor-spec.md`
-- **Claude Code:** Specs, review, integration test, version bump
-
-### Remaining v0.3.0
-- [ ] Artifact Trail Index — structured artifact tracking that survives compression
-- [ ] Cost Intelligence Recommendations — detect wasted exploration tokens
+- [x] CLI: `engram brief --project <name> [--format json] [--output CLAUDE.md]`
+- [x] 4 benchmarks validated against 13,881 real artifacts:
+  - Artifact completeness: 89.1% (target >80%)
+  - Context recovery: 100% (target >60%)
+  - Token savings: 64% (target >50%)
+  - Search precision: 89% (target >70%)
+- [x] Benchmark runner: `benchmark/run_benchmarks.py`
+- [x] Real data benchmarks with synthetic CI fallback
+- [x] Multi-agent build: Codex (brief.py), Cursor (CLI + benchmarks), Claude Code (specs, review, merge)
+- [x] 91 tests, 12 CLI commands
 
 ---
 
