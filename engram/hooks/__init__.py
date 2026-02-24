@@ -192,15 +192,20 @@ def handle_pretool_hook(stdin_json: dict) -> dict | None:
     }
 
 
-def generate_hook_config() -> dict:
+def generate_hook_config(include_session_start: bool = False) -> dict:
     """Generate Claude Code hook configuration JSON.
+
+    Args:
+        include_session_start: If True, adds a SessionStart hook that
+            auto-generates the slim brief into CLAUDE.md at session start.
 
     Returns the hooks section to merge into settings.json.
     """
     hooks_dir = Path(__file__).parent
     pretool_script = hooks_dir / "pretool.sh"
+    session_start_script = hooks_dir / "session-start.sh"
 
-    return {
+    config: dict = {
         "hooks": {
             "PreToolUse": [
                 {
@@ -216,24 +221,43 @@ def generate_hook_config() -> dict:
         }
     }
 
+    if include_session_start:
+        config["hooks"]["SessionStart"] = [
+            {
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": str(session_start_script),
+                        "timeout": 30,
+                    }
+                ],
+            }
+        ]
 
-def install_hook(scope: str = "global") -> str:
-    """Install Engram PreToolUse hook into Claude Code settings.
+    return config
+
+
+def install_hook(scope: str = "global", auto_brief: bool = False) -> str:
+    """Install Engram hooks into Claude Code settings.
 
     Args:
         scope: "global" for ~/.claude/settings.json,
                "project" for .claude/settings.json
+        auto_brief: If True, also installs a SessionStart hook that
+            auto-generates the slim brief into CLAUDE.md.
     """
     if scope == "project":
         settings_path = Path.cwd() / ".claude" / "settings.json"
     else:
         settings_path = Path.home() / ".claude" / "settings.json"
 
-    # Ensure pretool.sh is executable
+    # Ensure hook scripts are executable
     hooks_dir = Path(__file__).parent
-    pretool_script = hooks_dir / "pretool.sh"
-    if pretool_script.exists():
-        pretool_script.chmod(0o755)
+    for script_name in ("pretool.sh", "session-start.sh"):
+        script = hooks_dir / script_name
+        if script.exists():
+            script.chmod(0o755)
 
     # Read existing settings
     existing: dict[str, Any] = {}
@@ -243,14 +267,15 @@ def install_hook(scope: str = "global") -> str:
         except (json.JSONDecodeError, OSError):
             existing = {}
 
-    hook_config = generate_hook_config()
+    hook_config = generate_hook_config(include_session_start=auto_brief)
 
     if "hooks" not in existing:
         existing["hooks"] = {}
 
     existing_hooks = existing["hooks"]
-    new_pretool_hooks = hook_config["hooks"]["PreToolUse"]
 
+    # Install PreToolUse hook (deduplicate engram entries)
+    new_pretool_hooks = hook_config["hooks"]["PreToolUse"]
     if "PreToolUse" in existing_hooks:
         kept = []
         for entry in existing_hooks["PreToolUse"]:
@@ -266,7 +291,28 @@ def install_hook(scope: str = "global") -> str:
     else:
         existing_hooks["PreToolUse"] = new_pretool_hooks
 
+    # Install SessionStart hook if auto_brief enabled
+    if auto_brief and "SessionStart" in hook_config["hooks"]:
+        new_session_hooks = hook_config["hooks"]["SessionStart"]
+        if "SessionStart" in existing_hooks:
+            kept = []
+            for entry in existing_hooks["SessionStart"]:
+                hooks_list = entry.get("hooks", [])
+                is_engram = any(
+                    "session-start.sh" in (h.get("command", "") or "")
+                    for h in hooks_list
+                )
+                if not is_engram:
+                    kept.append(entry)
+            kept.extend(new_session_hooks)
+            existing_hooks["SessionStart"] = kept
+        else:
+            existing_hooks["SessionStart"] = new_session_hooks
+
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps(existing, indent=2) + "\n")
 
-    return f"Engram hook installed to {settings_path}"
+    parts = [f"Engram hooks installed to {settings_path}"]
+    if auto_brief:
+        parts.append("(includes SessionStart auto-brief)")
+    return " ".join(parts)

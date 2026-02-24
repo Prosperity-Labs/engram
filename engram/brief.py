@@ -20,6 +20,32 @@ DECISION_KEYWORDS = [
     "design",
 ]
 
+# Boilerplate phrases that match decision keywords but aren't real decisions
+BOILERPLATE_PREFIXES = [
+    "thanks",
+    "thank you",
+    "let's /compact",
+    "let's compact",
+    "entered plan mode",
+    "exited plan mode",
+    "/compact",
+    "plan mode",
+    "sure,",
+    "sure!",
+    "i'll ",
+    "let me ",
+    "sounds good",
+    "great,",
+    "great!",
+    "ok,",
+    "okay,",
+    "the user wants",
+    "the user is asking",
+    "i need to",
+]
+
+MIN_DECISION_LENGTH = 50  # Skip snippets shorter than this
+
 
 def _project_overview(db: SessionDB, project: str) -> dict:
     """Gather high-level project metrics."""
@@ -101,20 +127,37 @@ LIMIT 10
     }
 
 
+def _is_boilerplate(content: str) -> bool:
+    """Check if content is chat boilerplate, not a real architecture decision."""
+    lower = content.lower().strip()
+    if any(lower.startswith(prefix) for prefix in BOILERPLATE_PREFIXES):
+        return True
+    # Filter out raw JSON/dict content from tool_use messages
+    stripped = content.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        return True
+    return False
+
+
 def _architecture_patterns(db: SessionDB, project: str) -> list[dict]:
-    """Search for architecture decisions in session content."""
+    """Search for architecture decisions in session content.
+
+    Filters: role=assistant only, min length, excludes boilerplate.
+    """
     deduped: dict[str, dict] = {}
 
     for keyword in DECISION_KEYWORDS:
         try:
-            results = db.search(keyword, limit=3, session_id=None)
+            results = db.search(keyword, limit=5, session_id=None, role="assistant")
         except Exception:
             continue
         for result in results:
             if result.get("project") != project:
                 continue
             content = (result.get("content") or "").strip()
-            if not content:
+            if not content or len(content) < MIN_DECISION_LENGTH:
+                continue
+            if _is_boilerplate(content):
                 continue
             content_prefix = content[:200]
             if content_prefix in deduped:
@@ -201,8 +244,9 @@ def _cost_profile(db: SessionDB, project: str) -> dict:
 def _dangerous_files(db: SessionDB, project: str) -> list[dict]:
     """Find files with high error-to-write ratios — the most dangerous files.
 
-    Error artifacts store message content as their target (not file paths),
-    so we correlate by session: files written in sessions that also had errors.
+    Uses sequence proximity: only counts errors within 10 sequence positions
+    of a file write in the same session. This avoids inflated ratios from
+    session-level correlation (where any error anywhere counted against all files).
     """
     sql = """
     SELECT w.target as path,
@@ -213,6 +257,7 @@ def _dangerous_files(db: SessionDB, project: str) -> list[dict]:
     JOIN sessions s ON s.session_id = w.session_id
     LEFT JOIN artifacts e ON e.session_id = w.session_id
                           AND e.artifact_type = 'error'
+                          AND ABS(e.sequence - w.sequence) <= 10
     WHERE s.project = ?
       AND w.artifact_type IN ('file_write', 'file_create')
     GROUP BY w.target
@@ -260,6 +305,18 @@ def _co_change_clusters(db: SessionDB, project: str) -> list[list[str]]:
     return clusters
 
 
+def _short_path(full_path: str) -> str:
+    """Show parent/filename to disambiguate common names like handlers.ts.
+
+    '/src/flow-service/src/listeners/handlers.ts' → 'listeners/handlers.ts'
+    '/src/app.ts' → 'app.ts' (no parent needed for root files)
+    """
+    parts = Path(full_path).parts
+    if len(parts) >= 2:
+        return f"{parts[-2]}/{parts[-1]}"
+    return Path(full_path).name
+
+
 def generate_slim_brief(
     db: SessionDB,
     project: str,
@@ -296,7 +353,7 @@ def generate_slim_brief(
         lines.append("")
         lines.append("## Key Files")
         for f in key_files["most_modified"][:5]:
-            short = Path(f["path"]).name
+            short = _short_path(f["path"])
             lines.append(f"- `{short}` — {f['count']} edits, {f['sessions']} sessions")
 
     # Danger zones — files that tend to cause errors
@@ -304,7 +361,7 @@ def generate_slim_brief(
         lines.append("")
         lines.append("## Danger Zones")
         for f in dangerous[:3]:
-            short = Path(f['path']).name
+            short = _short_path(f['path'])
             lines.append(f"- `{short}` — {f['ratio']} error/write, {f['sessions']} sessions")
 
     # Co-change clusters — files that should be edited together
@@ -312,7 +369,7 @@ def generate_slim_brief(
         lines.append("")
         lines.append("## Co-Change Clusters")
         for cluster in clusters[:3]:
-            names = [Path(p).name for p in cluster]
+            names = [_short_path(p) for p in cluster]
             lines.append(f"- {' + '.join(f'`{n}`' for n in names)}")
 
     # Architecture decisions — load-bearing choices

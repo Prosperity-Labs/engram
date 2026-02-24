@@ -458,11 +458,12 @@ def cmd_brief(args: argparse.Namespace) -> None:
 
 
 def cmd_hooks_install(args: argparse.Namespace) -> None:
-    """Install Engram PreToolUse hook into Claude Code settings."""
+    """Install Engram hooks into Claude Code settings."""
     from .hooks import install_hook
 
     scope = "project" if args.project else "global"
-    result = install_hook(scope=scope)
+    auto_brief = getattr(args, "auto_brief", False)
+    result = install_hook(scope=scope, auto_brief=auto_brief)
     print(result)
 
 
@@ -481,6 +482,12 @@ def cmd_hook_handle(args: argparse.Namespace) -> None:
     result = handle_pretool_hook(stdin_json)
     if result:
         print(json.dumps(result))
+
+
+def cmd_mcp(args: argparse.Namespace) -> None:
+    """Start the Engram MCP server (stdio transport)."""
+    from engram.mcp_server import server
+    server.run()
 
 
 def cmd_reindex(args: argparse.Namespace) -> None:
@@ -602,15 +609,21 @@ def main() -> None:
     # hooks install
     p_hooks = subparsers.add_parser("hooks", help="Manage Claude Code hooks")
     hooks_sub = p_hooks.add_subparsers(dest="hooks_command")
-    p_hooks_install = hooks_sub.add_parser("install", help="Install Engram PreToolUse hook")
+    p_hooks_install = hooks_sub.add_parser("install", help="Install Engram hooks")
     p_hooks_install.add_argument("--project", action="store_true",
                                   help="Install to .claude/settings.json (project scope) instead of global")
+    p_hooks_install.add_argument("--auto-brief", action="store_true",
+                                  help="Also install SessionStart hook to auto-generate CLAUDE.md")
     p_hooks_install.set_defaults(func=cmd_hooks_install)
     p_hooks.set_defaults(func=lambda args: p_hooks.print_help())
 
     # hook-handle (hidden — called by the shell script)
     p_hook_handle = subparsers.add_parser("hook-handle", help=argparse.SUPPRESS)
     p_hook_handle.set_defaults(func=cmd_hook_handle)
+
+    # mcp
+    p_mcp = subparsers.add_parser("mcp", help="Start Engram MCP server (stdio transport)")
+    p_mcp.set_defaults(func=cmd_mcp)
 
     args = parser.parse_args()
     if not args.command:

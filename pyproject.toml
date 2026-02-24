@@ -4,10 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "engram"
-version = "0.4.0"
+version = "0.5.0"
 description = "Knowledge base for AI coding sessions — index, search, brief, and benchmark your agent workflows"
 requires-python = ">=3.10"
 license = "MIT"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+]
 
 [project.scripts]
 engram = "engram.cli:main"
