@@ -8,7 +8,7 @@ from engram.brief import (
     _project_overview,
     generate_brief,
 )
-from engram.recall.artifact_extractor import ArtifactExtractor
+from engram.recall.artifact_extractor import ArtifactExtractor, _extract_error_message
 from engram.recall.session_db import SessionDB
 
 
@@ -184,4 +184,135 @@ class TestGenerateBrief:
         result = generate_brief(brief_db, "nonexistent", format="markdown")
         assert "# Project Brief: nonexistent" in result
         assert "0" in result  # should show 0 sessions
+
+
+class TestExtractErrorMessage:
+    """Unit tests for _extract_error_message — the fix for raw JSON in recurring errors."""
+
+    def test_plain_text_error(self):
+        msg = "Error: Module not found — cannot resolve 'foo'"
+        result = _extract_error_message(msg)
+        assert result == msg
+
+    def test_plain_text_no_error(self):
+        assert _extract_error_message("All tests passed") is None
+
+    def test_empty_and_none(self):
+        assert _extract_error_message("") is None
+        assert _extract_error_message(None) is None
+
+    def test_json_tool_use_only_skipped(self):
+        """Pure tool_use content should NOT produce an error, even if params contain 'error'."""
+        import json
+
+        content = json.dumps(
+            [
+                {
+                    "type": "tool_use",
+                    "id": "tu_01",
+                    "name": "Read",
+                    "input": {"file_path": "/src/error_handler.ts"},
+                }
+            ]
+        )
+        assert _extract_error_message(content) is None
+
+    def test_json_text_block_with_error(self):
+        """Text block containing an error message should be extracted."""
+        import json
+
+        content = json.dumps(
+            [
+                {"type": "text", "text": "Error: CORS policy blocked the request"},
+                {
+                    "type": "tool_use",
+                    "id": "tu_02",
+                    "name": "Edit",
+                    "input": {"file_path": "/src/server.ts"},
+                },
+            ]
+        )
+        result = _extract_error_message(content)
+        assert result is not None
+        assert "CORS policy" in result
+        assert "tool_use" not in result
+
+    def test_json_text_block_no_error(self):
+        """Text block without error keywords should return None."""
+        import json
+
+        content = json.dumps(
+            [
+                {"type": "text", "text": "I'll fix the login handler now."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_03",
+                    "name": "Read",
+                    "input": {"file_path": "/src/login.ts"},
+                },
+            ]
+        )
+        assert _extract_error_message(content) is None
+
+    def test_truncates_long_error(self):
+        msg = "Error: " + "x" * 300
+        result = _extract_error_message(msg)
+        assert len(result) == 200
+
+    def test_single_tool_use_dict_skipped(self):
+        """A single tool_use dict (not in array) should be skipped."""
+        import json
+
+        content = json.dumps(
+            {"type": "tool_use", "id": "tu_04", "name": "Bash", "input": {"command": "echo error"}}
+        )
+        assert _extract_error_message(content) is None
+
+
+class TestErrorExtractionEndToEnd:
+    """End-to-end: tool_use-only messages should not appear as errors in the brief."""
+
+    def test_tool_use_json_not_stored_as_error(self, tmp_db):
+        import json
+
+        db = tmp_db
+        session_id = "error-extraction-e2e"
+        with db._connect() as conn:
+            conn.execute(
+                """INSERT INTO sessions
+                   (session_id, filepath, project, message_count, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (session_id, "/tmp/test.jsonl", "test-project", 3,
+                 "2026-02-20T10:00:00Z", "2026-02-20T11:00:00Z"),
+            )
+            # Message with tool_use JSON that happens to reference 'error_handler'
+            tool_use_content = json.dumps([
+                {
+                    "type": "tool_use",
+                    "id": "tu_01",
+                    "name": "Read",
+                    "input": {"file_path": "/src/error_handler.ts"},
+                }
+            ])
+            # Message with real error text
+            real_error = "TypeError: Cannot read property 'id' of undefined"
+            conn.executemany(
+                """INSERT INTO messages
+                   (session_id, sequence, role, content, timestamp,
+                    tool_name, token_usage_in, token_usage_out,
+                    cache_read_tokens, cache_create_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (session_id, 0, "assistant", tool_use_content, None, "Read", 100, 50, 0, 0),
+                    (session_id, 1, "assistant", real_error, None, None, 100, 50, 0, 0),
+                ],
+            )
+
+        extractor = ArtifactExtractor(db)
+        artifacts = extractor.extract_session(session_id)
+        errors = [a for a in artifacts if a["artifact_type"] == "error"]
+
+        assert len(errors) == 1
+        assert "TypeError" in errors[0]["target"]
+        assert "tool_use" not in errors[0]["target"]
 

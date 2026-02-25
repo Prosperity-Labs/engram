@@ -10,6 +10,43 @@ from engram.recall.session_db import SessionDB
 
 _TOOL_USE_RE = re.compile(r"tool_use:(\w+)\(([^)]*)\)")
 _PARAM_RE = re.compile(r"(\w+)=([^,]+)")
+_ERROR_TAGS = ("error", "Error", "ERROR")
+
+
+def _extract_error_message(content: str) -> str | None:
+    """Extract actual error text from message content, skipping tool_use JSON.
+
+    Returns the first 200 chars of real error text, or None if the content
+    is pure tool_use JSON with no meaningful error message.
+    """
+    if not content:
+        return None
+
+    # Try to parse as JSON (Claude Code stores structured messages as JSON)
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, list):
+            # Extract only text blocks, skip tool_use blocks
+            text_parts = [
+                block.get("text", "")
+                for block in parsed
+                if isinstance(block, dict) and block.get("type") == "text"
+            ]
+            if not text_parts:
+                return None  # Pure tool_use, no error text
+            text = "\n".join(text_parts)
+        elif isinstance(parsed, dict) and parsed.get("type") == "tool_use":
+            return None  # Single tool_use block
+        else:
+            text = content
+    except (json.JSONDecodeError, ValueError):
+        text = content
+
+    # Re-check: does the extracted text actually contain error keywords?
+    if not any(tag in text for tag in _ERROR_TAGS):
+        return None
+
+    return text[:200]
 
 
 class ArtifactExtractor:
@@ -169,15 +206,16 @@ class ArtifactExtractor:
                             ),
                         )
 
-                if (
-                    row["role"] == "assistant"
-                    and content
-                    and any(tag in content for tag in ("error", "Error", "ERROR"))
-                ):
+                error_msg = (
+                    _extract_error_message(content)
+                    if row["role"] == "assistant" and content
+                    else None
+                )
+                if error_msg:
                     artifact = {
                         "session_id": session_id,
                         "artifact_type": "error",
-                        "target": content[:200],
+                        "target": error_msg,
                         "tool_name": tool_name or None,
                         "sequence": sequence,
                         "context": context,
