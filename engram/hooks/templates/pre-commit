@@ -1,0 +1,8 @@
+#!/bin/sh
+# Loopwright pre-commit hook — captures staged diff as a snapshot file.
+# Set LOOPWRIGHT_WORKTREE_ID before use.
+# Optionally set LOOPWRIGHT_SESSION_ID to link the snapshot to an agent session.
+#
+# Install: cp this file to <your-repo>/.git/hooks/pre-commit && chmod +x
+
+exec python3 -m engram.hooks.loopwright_pre_commit

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,107 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 """
 
+# ---------------------------------------------------------------------------
+# Loopwright tables — worktree tracking, checkpoints, correction cycles
+# ---------------------------------------------------------------------------
+
+_LOOPWRIGHT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS worktrees (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT REFERENCES sessions(session_id),
+    branch_name     TEXT NOT NULL,
+    base_branch     TEXT NOT NULL DEFAULT 'main',
+    status          TEXT NOT NULL DEFAULT 'active'
+                    CHECK(status IN ('active','passed','failed','escalated','merged')),
+    task_description TEXT,
+    created_at      TEXT NOT NULL,
+    resolved_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    worktree_id         INTEGER NOT NULL REFERENCES worktrees(id),
+    session_id          TEXT REFERENCES sessions(session_id),
+    git_sha             TEXT,
+    test_results        TEXT,    -- JSON
+    artifact_snapshot   TEXT,    -- JSON
+    graph_delta         TEXT,    -- JSON (Noodlbox impact: changed symbols, callers, communities, processes)
+    created_at          TEXT NOT NULL,
+    label               TEXT
+);
+
+CREATE TABLE IF NOT EXISTS correction_cycles (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    worktree_id         INTEGER NOT NULL REFERENCES worktrees(id),
+    cycle_number        INTEGER NOT NULL,
+    trigger_error       TEXT,
+    error_context       TEXT,    -- JSON (browser logs, DB errors, AWS logs)
+    checkpoint_id       INTEGER REFERENCES checkpoints(id),
+    agent_session_id    TEXT,
+    outcome             TEXT CHECK(outcome IN ('passed','failed','escalated')),
+    duration_seconds    INTEGER,
+    created_at          TEXT NOT NULL
+);
+
+-- FTS5 for searching across worktree task descriptions and correction errors
+CREATE VIRTUAL TABLE IF NOT EXISTS worktrees_fts USING fts5(
+    task_description,
+    branch_name,
+    content='worktrees',
+    content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS worktrees_ai AFTER INSERT ON worktrees BEGIN
+    INSERT INTO worktrees_fts(rowid, task_description, branch_name)
+    VALUES (new.id, new.task_description, new.branch_name);
+END;
+
+CREATE TRIGGER IF NOT EXISTS worktrees_ad AFTER DELETE ON worktrees BEGIN
+    INSERT INTO worktrees_fts(worktrees_fts, rowid, task_description, branch_name)
+    VALUES ('delete', old.id, old.task_description, old.branch_name);
+END;
+
+CREATE TRIGGER IF NOT EXISTS worktrees_au AFTER UPDATE ON worktrees BEGIN
+    INSERT INTO worktrees_fts(worktrees_fts, rowid, task_description, branch_name)
+    VALUES ('delete', old.id, old.task_description, old.branch_name);
+    INSERT INTO worktrees_fts(rowid, task_description, branch_name)
+    VALUES (new.id, new.task_description, new.branch_name);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS correction_cycles_fts USING fts5(
+    trigger_error,
+    content='correction_cycles',
+    content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS correction_cycles_ai AFTER INSERT ON correction_cycles BEGIN
+    INSERT INTO correction_cycles_fts(rowid, trigger_error)
+    VALUES (new.id, new.trigger_error);
+END;
+
+CREATE TRIGGER IF NOT EXISTS correction_cycles_ad AFTER DELETE ON correction_cycles BEGIN
+    INSERT INTO correction_cycles_fts(correction_cycles_fts, rowid, trigger_error)
+    VALUES ('delete', old.id, old.trigger_error);
+END;
+
+CREATE TRIGGER IF NOT EXISTS correction_cycles_au AFTER UPDATE ON correction_cycles BEGIN
+    INSERT INTO correction_cycles_fts(correction_cycles_fts, rowid, trigger_error)
+    VALUES ('delete', old.id, old.trigger_error);
+    INSERT INTO correction_cycles_fts(rowid, trigger_error)
+    VALUES (new.id, new.trigger_error);
+END;
+
+-- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_worktrees_session ON worktrees(session_id);
+CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_worktree ON checkpoints(worktree_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id);
+CREATE INDEX IF NOT EXISTS idx_correction_cycles_worktree ON correction_cycles(worktree_id);
+CREATE INDEX IF NOT EXISTS idx_correction_cycles_checkpoint ON correction_cycles(checkpoint_id);
+"""
+
 
 class SessionDB:
     def __init__(self, db_path: str | Path | None = None):
@@ -91,6 +193,7 @@ class SessionDB:
     def _init_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_SCHEMA_SQL)
+            conn.executescript(_LOOPWRIGHT_SCHEMA_SQL)
             self._migrate(conn)
 
     def _migrate(self, conn) -> None:
@@ -616,6 +719,193 @@ class SessionDB:
             "expensive_sessions": expensive,
             "topics": topics,
         }
+
+    # ------------------------------------------------------------------
+    # Loopwright: worktree / checkpoint / correction cycle helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def create_worktree(
+        self,
+        branch_name: str,
+        *,
+        session_id: str | None = None,
+        base_branch: str = "main",
+        status: str = "active",
+        task_description: str | None = None,
+    ) -> int:
+        """Insert a new worktree row. Returns the new worktree id."""
+        now = self._now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO worktrees
+                   (session_id, branch_name, base_branch, status,
+                    task_description, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (session_id, branch_name, base_branch, status,
+                 task_description, now),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def create_checkpoint(
+        self,
+        worktree_id: int,
+        *,
+        session_id: str | None = None,
+        git_sha: str | None = None,
+        test_results: Any = None,
+        artifact_snapshot: Any = None,
+        graph_delta: Any = None,
+        label: str | None = None,
+    ) -> int:
+        """Insert a checkpoint for a worktree. Returns the new checkpoint id."""
+        now = self._now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO checkpoints
+                   (worktree_id, session_id, git_sha, test_results,
+                    artifact_snapshot, graph_delta, created_at, label)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    worktree_id,
+                    session_id,
+                    git_sha,
+                    json.dumps(test_results) if test_results is not None else None,
+                    json.dumps(artifact_snapshot) if artifact_snapshot is not None else None,
+                    json.dumps(graph_delta) if graph_delta is not None else None,
+                    now,
+                    label,
+                ),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def create_correction_cycle(
+        self,
+        worktree_id: int,
+        cycle_number: int,
+        *,
+        trigger_error: str | None = None,
+        error_context: Any = None,
+        checkpoint_id: int | None = None,
+        agent_session_id: str | None = None,
+        outcome: str | None = None,
+        duration_seconds: int | None = None,
+    ) -> int:
+        """Insert a correction cycle. Returns the new cycle id."""
+        now = self._now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO correction_cycles
+                   (worktree_id, cycle_number, trigger_error, error_context,
+                    checkpoint_id, agent_session_id, outcome,
+                    duration_seconds, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    worktree_id,
+                    cycle_number,
+                    trigger_error,
+                    json.dumps(error_context) if error_context is not None else None,
+                    checkpoint_id,
+                    agent_session_id,
+                    outcome,
+                    duration_seconds,
+                    now,
+                ),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def get_latest_checkpoint(self, worktree_id: int) -> dict | None:
+        """Return the most recent checkpoint for a worktree, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT * FROM checkpoints
+                   WHERE worktree_id = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (worktree_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            d = dict(row)
+            for json_col in ("test_results", "artifact_snapshot", "graph_delta"):
+                if d.get(json_col):
+                    try:
+                        d[json_col] = json.loads(d[json_col])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return d
+
+    def get_worktree(self, worktree_id: int) -> dict | None:
+        """Return a worktree by id, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM worktrees WHERE id = ?", (worktree_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_worktree_status(
+        self, worktree_id: int, status: str
+    ) -> None:
+        """Update worktree status. Sets resolved_at on terminal states."""
+        resolved = self._now_iso() if status in ("passed", "failed", "escalated", "merged") else None
+        with self._connect() as conn:
+            conn.execute(
+                """UPDATE worktrees SET status = ?, resolved_at = COALESCE(?, resolved_at)
+                   WHERE id = ?""",
+                (status, resolved, worktree_id),
+            )
+
+    def get_correction_cycles(self, worktree_id: int) -> list[dict]:
+        """Return all correction cycles for a worktree, ordered by cycle number."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM correction_cycles
+                   WHERE worktree_id = ?
+                   ORDER BY cycle_number""",
+                (worktree_id,),
+            ).fetchall()
+            results = []
+            for row in rows:
+                d = dict(row)
+                if d.get("error_context"):
+                    try:
+                        d["error_context"] = json.loads(d["error_context"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                results.append(d)
+            return results
+
+    def search_worktrees(self, query: str, limit: int = 20) -> list[dict]:
+        """Full-text search across worktree task descriptions and branch names."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT w.*,
+                       snippet(worktrees_fts, 0, '>>>', '<<<', '...', 48) AS snippet
+                   FROM worktrees_fts
+                   JOIN worktrees w ON w.id = worktrees_fts.rowid
+                   WHERE worktrees_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                (query, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def search_correction_errors(self, query: str, limit: int = 20) -> list[dict]:
+        """Full-text search across correction cycle trigger errors."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT cc.*,
+                       snippet(correction_cycles_fts, 0, '>>>', '<<<', '...', 48) AS snippet
+                   FROM correction_cycles_fts
+                   JOIN correction_cycles cc ON cc.id = correction_cycles_fts.rowid
+                   WHERE correction_cycles_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                (query, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # JSONL parsing
