@@ -74,6 +74,7 @@ def main() -> int:
         return 1
 
     session_id = os.environ.get("LOOPWRIGHT_SESSION_ID")
+    ab_variant_label = os.environ.get("LOOPWRIGHT_AB_VARIANT")
     git_sha = get_head_sha()
     committed_files = get_committed_files()
     commit_msg = get_commit_message()
@@ -87,6 +88,7 @@ def main() -> int:
         session_id=session_id,
         git_sha=git_sha,
         artifact_snapshot=committed_files,
+        ab_variant_label=ab_variant_label,
         label=label,
     )
 

@@ -50,7 +50,8 @@ class TestSchemaCreation:
             }
         expected = {
             "id", "session_id", "branch_name", "base_branch", "status",
-            "task_description", "created_at", "resolved_at",
+            "task_description", "ab_variant_label", "ab_brief_metadata",
+            "results_json", "created_at", "resolved_at",
         }
         assert expected == cols
 
@@ -62,7 +63,8 @@ class TestSchemaCreation:
             }
         expected = {
             "id", "worktree_id", "session_id", "git_sha", "test_results",
-            "artifact_snapshot", "graph_delta", "created_at", "label",
+            "artifact_snapshot", "graph_delta", "ab_variant_label",
+            "created_at", "label",
         }
         assert expected == cols
 

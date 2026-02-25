@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS worktrees (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','passed','failed','escalated','merged')),
     task_description TEXT,
+    ab_variant_label TEXT,
+    ab_brief_metadata TEXT, -- JSON
+    results_json     TEXT, -- JSON summary for A/B comparisons
     created_at      TEXT NOT NULL,
     resolved_at     TEXT
 );
@@ -92,6 +95,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     test_results        TEXT,    -- JSON
     artifact_snapshot   TEXT,    -- JSON
     graph_delta         TEXT,    -- JSON (Noodlbox impact: changed symbols, callers, communities, processes)
+    ab_variant_label    TEXT,
     created_at          TEXT NOT NULL,
     label               TEXT
 );
@@ -198,13 +202,29 @@ class SessionDB:
 
     def _migrate(self, conn) -> None:
         """Add columns that may be missing from older databases."""
-        columns = {
+        message_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
         }
-        if "cache_read_tokens" not in columns:
+        if "cache_read_tokens" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
-        if "cache_create_tokens" not in columns:
+        if "cache_create_tokens" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN cache_create_tokens INTEGER DEFAULT 0")
+
+        worktree_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(worktrees)").fetchall()
+        }
+        if "ab_variant_label" not in worktree_columns:
+            conn.execute("ALTER TABLE worktrees ADD COLUMN ab_variant_label TEXT")
+        if "ab_brief_metadata" not in worktree_columns:
+            conn.execute("ALTER TABLE worktrees ADD COLUMN ab_brief_metadata TEXT")
+        if "results_json" not in worktree_columns:
+            conn.execute("ALTER TABLE worktrees ADD COLUMN results_json TEXT")
+
+        checkpoint_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(checkpoints)").fetchall()
+        }
+        if "ab_variant_label" not in checkpoint_columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN ab_variant_label TEXT")
 
     # ------------------------------------------------------------------
     # Public API
@@ -759,6 +779,7 @@ class SessionDB:
         test_results: Any = None,
         artifact_snapshot: Any = None,
         graph_delta: Any = None,
+        ab_variant_label: str | None = None,
         label: str | None = None,
     ) -> int:
         """Insert a checkpoint for a worktree. Returns the new checkpoint id."""
@@ -767,8 +788,8 @@ class SessionDB:
             cur = conn.execute(
                 """INSERT INTO checkpoints
                    (worktree_id, session_id, git_sha, test_results,
-                    artifact_snapshot, graph_delta, created_at, label)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    artifact_snapshot, graph_delta, ab_variant_label, created_at, label)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     worktree_id,
                     session_id,
@@ -776,6 +797,7 @@ class SessionDB:
                     json.dumps(test_results) if test_results is not None else None,
                     json.dumps(artifact_snapshot) if artifact_snapshot is not None else None,
                     json.dumps(graph_delta) if graph_delta is not None else None,
+                    ab_variant_label,
                     now,
                     label,
                 ),
@@ -843,7 +865,16 @@ class SessionDB:
             row = conn.execute(
                 "SELECT * FROM worktrees WHERE id = ?", (worktree_id,)
             ).fetchone()
-            return dict(row) if row else None
+            if row is None:
+                return None
+            d = dict(row)
+            for json_col in ("ab_brief_metadata", "results_json"):
+                if d.get(json_col):
+                    try:
+                        d[json_col] = json.loads(d[json_col])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return d
 
     def update_worktree_status(
         self, worktree_id: int, status: str
@@ -856,6 +887,50 @@ class SessionDB:
                    WHERE id = ?""",
                 (status, resolved, worktree_id),
             )
+
+    def update_worktree_ab_metadata(
+        self,
+        worktree_id: int,
+        *,
+        variant_label: str | None = None,
+        brief_metadata: Any = None,
+    ) -> None:
+        """Persist A/B brief metadata on a worktree row."""
+        with self._connect() as conn:
+            conn.execute(
+                """UPDATE worktrees
+                   SET ab_variant_label = COALESCE(?, ab_variant_label),
+                       ab_brief_metadata = COALESCE(?, ab_brief_metadata)
+                   WHERE id = ?""",
+                (
+                    variant_label,
+                    json.dumps(brief_metadata) if brief_metadata is not None else None,
+                    worktree_id,
+                ),
+            )
+
+    def store_worktree_results(self, worktree_id: int, results: Any) -> None:
+        """Persist computed A/B result summary JSON on a worktree row."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE worktrees SET results_json = ? WHERE id = ?",
+                (json.dumps(results), worktree_id),
+            )
+
+    def get_worktree_results(self, worktree_id: int) -> dict | None:
+        """Return parsed worktree results_json, if present."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT results_json FROM worktrees WHERE id = ?",
+                (worktree_id,),
+            ).fetchone()
+        if not row or not row["results_json"]:
+            return None
+        try:
+            parsed = json.loads(row["results_json"])
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def get_correction_cycles(self, worktree_id: int) -> list[dict]:
         """Return all correction cycles for a worktree, ordered by cycle number."""
