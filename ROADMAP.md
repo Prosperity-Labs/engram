@@ -1,6 +1,6 @@
 # Engram Roadmap
 
-> **Last Updated:** 2026-02-22
+> **Last Updated:** 2026-02-26
 
 ## Shipped (v0.1.0)
 
@@ -96,6 +96,63 @@
 - [ ] `engram install` must be run manually before hooks have data — UX gap
 - [ ] Options: SessionStart hook runs `engram install`, lazy index in pretool.sh, background daemon
 - [ ] Goal: zero-setup — install hooks once, everything stays fresh automatically
+
+---
+
+## Track 2 — Engram MCP + Natural Language Search (v0.5.0)
+
+> **Status:** In progress
+> **Agents:** Cursor (MCP server), Codex (loop controller + install wiring)
+> **Branch:** `feat/nl-search-mcp`
+
+The MCP server exists (`engram/mcp_server.py`, 8 tools, wired via `.mcp.json`). But `engram_search` is a raw FTS5 pass-through — it requires exact keywords. Natural language queries like "how did we configure hooks last time" return nothing useful.
+
+### The upgrade
+
+- [ ] **Query rewriting in `engram_search`**: natural language → keyword expansion → FTS5 → ranked snippets
+  - Extract 3-5 keywords from natural language input
+  - Run FTS5 search for each keyword against artifacts + sessions tables
+  - Merge results, deduplicate, rank by relevance + recency
+  - Return `query_interpreted_as: string[]` alongside results — makes search transparent and debuggable
+- [ ] **`engram install` auto-wires MCP**: sets up `.mcp.json` alongside the hook config
+  - Detect Claude Code projects dir, write MCP config
+  - Idempotent — safe to run multiple times
+- [ ] **Tests**: NL query → keyword extraction, ranking, deduplication, edge cases
+
+### What this unlocks
+
+```
+"How did we configure hooks last time"          → works
+"What broke in the escrow webhook sessions"     → works
+"Find sessions where we touched authentication" → works
+```
+
+### MCP tool spec (Cursor)
+
+```
+Tool name: engram_search
+Input: { query: string, limit?: number, project?: string }
+Output: { results: Snippet[], query_interpreted_as: string[], count: number }
+```
+
+Each `Snippet`:
+```json
+{
+  "session_id": "abc-123",
+  "project": "monra-app",
+  "role": "assistant",
+  "tool_name": "Edit",
+  "snippet": "...matching text...",
+  "timestamp": "2026-02-18T10:00:00Z"
+}
+```
+
+### Delegation
+
+| Agent | Scope | Spec |
+|-------|-------|------|
+| Cursor | `engram/mcp_server.py` — NL query rewriting, keyword extraction, ranking | `docs/plans/track2-cursor-spec.md` |
+| Codex | `engram/cli.py` — `engram install` auto-wires MCP config | `docs/plans/track2-codex-spec.md` |
 
 ---
 

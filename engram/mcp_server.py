@@ -55,18 +55,50 @@ def engram_search(
         limit: Max results to return (default 10)
         project: Filter to a specific project name
     """
+    from engram.query_rewriter import rewrite_query
+
     db = _get_db()
-    sanitized = _sanitize_fts_query(query)
-    results = db.search(sanitized, limit=limit)
+    rewritten = rewrite_query(query)
 
-    if project:
-        results = [r for r in results if r.get("project") == project]
+    # Search each keyword independently, collect all results
+    all_results: dict[tuple, dict] = {}  # (session_id, sequence) → result
+    keyword_hits: dict[tuple, int] = {}  # (session_id, sequence) → hit count
 
-    if not results:
-        return json.dumps({"results": [], "message": f"No results for: {query}"})
+    for fts_q in rewritten["fts_queries"]:
+        try:
+            results = db.search(fts_q, limit=limit * 3)  # oversample for merging
+        except Exception:
+            continue  # skip keywords that FTS5 rejects
+
+        if project:
+            results = [r for r in results if r.get("project") == project]
+
+        for r in results:
+            key = (r["session_id"], r.get("sequence", r.get("snippet", "")[:50]))
+            if key not in all_results:
+                all_results[key] = r
+                keyword_hits[key] = 0
+            keyword_hits[key] += 1
+
+    if not all_results:
+        return json.dumps({
+            "results": [],
+            "query_interpreted_as": rewritten["keywords"],
+            "message": f"No results for: {query}",
+        })
+
+    # Rank: more keyword hits = more relevant, then by recency
+    ranked = sorted(
+        all_results.values(),
+        key=lambda r: (
+            keyword_hits[(r["session_id"], r.get("sequence", r.get("snippet", "")[:50]))],
+            r.get("timestamp") or "",
+        ),
+        reverse=True,
+    )
 
     output = []
-    for r in results:
+    for r in ranked[:limit]:
         output.append({
             "session_id": r["session_id"],
             "project": r["project"],
@@ -76,7 +108,11 @@ def engram_search(
             "timestamp": r["timestamp"],
         })
 
-    return json.dumps({"results": output, "count": len(output)})
+    return json.dumps({
+        "results": output,
+        "query_interpreted_as": rewritten["keywords"],
+        "count": len(output),
+    })
 
 
 # ── Tool 2: File History ────────────────────────────────────────────
