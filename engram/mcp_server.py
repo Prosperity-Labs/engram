@@ -92,7 +92,7 @@ def engram_search(
         all_results.values(),
         key=lambda r: (
             keyword_hits[(r["session_id"], r.get("sequence", r.get("snippet", "")[:50]))],
-            r.get("timestamp", ""),
+            r.get("timestamp") or "",
         ),
         reverse=True,
     )
