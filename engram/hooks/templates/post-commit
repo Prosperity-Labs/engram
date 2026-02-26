@@ -1,0 +1,8 @@
+#!/bin/sh
+# Loopwright post-commit hook — writes a checkpoint row to sessions.db.
+# Set LOOPWRIGHT_WORKTREE_ID before use (e.g. in your shell profile or wrapper script).
+# Optionally set LOOPWRIGHT_SESSION_ID to link the checkpoint to an agent session.
+#
+# Install: cp this file to <your-repo>/.git/hooks/post-commit && chmod +x
+
+exec python3 -m engram.hooks.loopwright_post_commit

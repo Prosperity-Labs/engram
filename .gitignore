@@ -7,3 +7,6 @@ build/
 .eggs/
 .venv/
 *.db
+
+# A/B test worktree configs (don't commit test-specific settings)
+.claude/settings.json
