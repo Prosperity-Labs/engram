@@ -952,6 +952,65 @@ class SessionDB:
                 results.append(d)
             return results
 
+    def get_correction_cycle_count(self, worktree_id: int) -> int:
+        """Return number of correction cycles for a worktree."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM correction_cycles WHERE worktree_id = ?",
+                (worktree_id,),
+            ).fetchone()
+            return row["cnt"] if row else 0
+
+    def get_latest_correction_cycle(self, worktree_id: int) -> dict | None:
+        """Return the most recent correction cycle, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT * FROM correction_cycles
+                   WHERE worktree_id = ?
+                   ORDER BY cycle_number DESC LIMIT 1""",
+                (worktree_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            d = dict(row)
+            if d.get("error_context"):
+                try:
+                    d["error_context"] = json.loads(d["error_context"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            return d
+
+    def list_worktrees_by_status(self, status: str, limit: int = 50) -> list[dict]:
+        """List worktrees filtered by status."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM worktrees
+                   WHERE status = ?
+                   ORDER BY id DESC
+                   LIMIT ?""",
+                (status, limit),
+            ).fetchall()
+            results = []
+            for row in rows:
+                d = dict(row)
+                for json_col in ("ab_brief_metadata", "results_json"):
+                    if d.get(json_col):
+                        try:
+                            d[json_col] = json.loads(d[json_col])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                results.append(d)
+            return results
+
+    def get_worktree_with_cycles(self, worktree_id: int) -> dict | None:
+        """Return worktree with its correction_cycles and latest checkpoint embedded."""
+        wt = self.get_worktree(worktree_id)
+        if wt is None:
+            return None
+        wt["correction_cycles"] = self.get_correction_cycles(worktree_id)
+        wt["latest_checkpoint"] = self.get_latest_checkpoint(worktree_id)
+        return wt
+
     def search_worktrees(self, query: str, limit: int = 20) -> list[dict]:
         """Full-text search across worktree task descriptions and branch names."""
         with self._connect() as conn:
