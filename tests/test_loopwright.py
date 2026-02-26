@@ -502,3 +502,276 @@ class TestFullWorkflow:
         results = tmp_db.search("Hello")
         assert len(results) >= 1
         assert results[0]["content"] == "Hello world"
+
+
+# ---------------------------------------------------------------------------
+# Query helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestQueryHelpers:
+    def test_get_correction_cycle_count(self, tmp_db: SessionDB):
+        wt_id = tmp_db.create_worktree("feature/count", task_description="count test")
+        assert tmp_db.get_correction_cycle_count(wt_id) == 0
+
+        tmp_db.create_correction_cycle(wt_id, 1, trigger_error="error 1")
+        tmp_db.create_correction_cycle(wt_id, 2, trigger_error="error 2")
+        assert tmp_db.get_correction_cycle_count(wt_id) == 2
+
+    def test_get_correction_cycle_count_empty(self, tmp_db: SessionDB):
+        wt_id = tmp_db.create_worktree("feature/empty-count", task_description="no cycles")
+        assert tmp_db.get_correction_cycle_count(wt_id) == 0
+
+    def test_get_latest_correction_cycle(self, tmp_db: SessionDB):
+        wt_id = tmp_db.create_worktree("feature/latest-cc", task_description="latest cycle")
+        tmp_db.create_correction_cycle(
+            wt_id, 1, trigger_error="first error", outcome="failed",
+        )
+        tmp_db.create_correction_cycle(
+            wt_id, 2,
+            trigger_error="second error",
+            error_context={"errors": [{"file": "a.ts", "line": 10}]},
+            outcome="passed",
+        )
+
+        latest = tmp_db.get_latest_correction_cycle(wt_id)
+        assert latest is not None
+        assert latest["cycle_number"] == 2
+        assert latest["trigger_error"] == "second error"
+        assert latest["outcome"] == "passed"
+        assert isinstance(latest["error_context"], dict)
+
+    def test_get_latest_correction_cycle_none(self, tmp_db: SessionDB):
+        wt_id = tmp_db.create_worktree("feature/no-cc", task_description="none")
+        assert tmp_db.get_latest_correction_cycle(wt_id) is None
+
+    def test_list_worktrees_by_status(self, tmp_db: SessionDB):
+        tmp_db.create_worktree("feature/a", task_description="active one")
+        wt_b = tmp_db.create_worktree("feature/b", task_description="will fail")
+        tmp_db.create_worktree("feature/c", task_description="active two")
+        tmp_db.update_worktree_status(wt_b, "failed")
+
+        active = tmp_db.list_worktrees_by_status("active")
+        assert len(active) == 2
+        assert all(w["status"] == "active" for w in active)
+
+        failed = tmp_db.list_worktrees_by_status("failed")
+        assert len(failed) == 1
+        assert failed[0]["id"] == wt_b
+
+    def test_list_worktrees_by_status_empty(self, tmp_db: SessionDB):
+        results = tmp_db.list_worktrees_by_status("escalated")
+        assert results == []
+
+    def test_list_worktrees_by_status_respects_limit(self, tmp_db: SessionDB):
+        for i in range(5):
+            tmp_db.create_worktree(f"feature/lim-{i}", task_description=f"task {i}")
+        results = tmp_db.list_worktrees_by_status("active", limit=3)
+        assert len(results) == 3
+
+    def test_get_worktree_with_cycles(self, tmp_db: SessionDB):
+        wt_id = tmp_db.create_worktree(
+            "feature/full",
+            task_description="full worktree query",
+        )
+        cp_id = tmp_db.create_checkpoint(
+            wt_id, git_sha="abc123",
+            test_results={"passed": 5, "failed": 1},
+            artifact_snapshot=["src/main.py"],
+        )
+        tmp_db.create_correction_cycle(
+            wt_id, 1,
+            trigger_error="test_main failed",
+            checkpoint_id=cp_id,
+            outcome="failed",
+        )
+        tmp_db.create_correction_cycle(
+            wt_id, 2,
+            trigger_error="test_main assertion",
+            outcome="passed",
+        )
+
+        result = tmp_db.get_worktree_with_cycles(wt_id)
+        assert result is not None
+        assert result["branch_name"] == "feature/full"
+        assert result["task_description"] == "full worktree query"
+
+        assert len(result["correction_cycles"]) == 2
+        assert result["correction_cycles"][0]["cycle_number"] == 1
+        assert result["correction_cycles"][1]["outcome"] == "passed"
+
+        assert result["latest_checkpoint"] is not None
+        assert result["latest_checkpoint"]["git_sha"] == "abc123"
+        assert result["latest_checkpoint"]["test_results"] == {"passed": 5, "failed": 1}
+
+    def test_get_worktree_with_cycles_not_found(self, tmp_db: SessionDB):
+        assert tmp_db.get_worktree_with_cycles(999) is None
+
+    def test_get_worktree_with_cycles_no_children(self, tmp_db: SessionDB):
+        wt_id = tmp_db.create_worktree("feature/bare", task_description="bare wt")
+        result = tmp_db.get_worktree_with_cycles(wt_id)
+        assert result is not None
+        assert result["correction_cycles"] == []
+        assert result["latest_checkpoint"] is None
+
+
+# ---------------------------------------------------------------------------
+# Correction brief tests
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectionBrief:
+    def test_generate_fresh_worktree(self, tmp_db: SessionDB):
+        """Single error, no prior cycles — basic brief generation."""
+        from engram.correction_brief import generate_correction_brief
+
+        wt_id = tmp_db.create_worktree(
+            "feature/brief-test", task_description="brief generation test",
+        )
+        brief = generate_correction_brief(
+            tmp_db,
+            wt_id,
+            cycle_number=1,
+            trigger_error="TypeError: Cannot read property 'id' of undefined",
+            error_context={
+                "errors": [
+                    {"file": "src/handler.ts", "line": 42, "type": "TypeError",
+                     "message": "Cannot read property 'id' of undefined"},
+                ],
+                "test_command": "bun test",
+                "exit_code": 1,
+                "changed_files": ["src/handler.ts"],
+            },
+        )
+
+        assert "# Correction Brief (Cycle 1 of max 3)" in brief
+        assert "TypeError" in brief
+        assert "src/handler.ts" in brief
+        assert "`bun test`" in brief
+        assert "## Instructions" in brief
+
+    def test_generate_with_prior_cycles(self, tmp_db: SessionDB):
+        """Two prior cycles should populate Prior Attempts section."""
+        from engram.correction_brief import generate_correction_brief
+
+        wt_id = tmp_db.create_worktree(
+            "feature/prior", task_description="prior cycles test",
+        )
+        tmp_db.create_checkpoint(wt_id, git_sha="aaa111")
+        tmp_db.create_correction_cycle(
+            wt_id, 1,
+            trigger_error="AssertionError: expected 200 got 401",
+            outcome="failed",
+            duration_seconds=30,
+        )
+        tmp_db.create_correction_cycle(
+            wt_id, 2,
+            trigger_error="AssertionError: missing auth header",
+            outcome="failed",
+            duration_seconds=45,
+        )
+
+        brief = generate_correction_brief(
+            tmp_db,
+            wt_id,
+            cycle_number=3,
+            trigger_error="AssertionError: token expired",
+        )
+
+        assert "Cycle 3 of max 3" in brief
+        assert "## Prior Attempts (This Worktree)" in brief
+        assert "Cycle 1:" in brief
+        assert "Cycle 2:" in brief
+        assert "outcome: **failed**" in brief
+
+    def test_generate_with_checkpoint(self, tmp_db: SessionDB):
+        """Checkpoint data should appear in the brief."""
+        from engram.correction_brief import generate_correction_brief
+
+        wt_id = tmp_db.create_worktree(
+            "feature/cp-brief", task_description="checkpoint brief",
+        )
+        tmp_db.create_checkpoint(
+            wt_id,
+            git_sha="deadbeef",
+            artifact_snapshot=["src/app.ts", "src/db.ts"],
+            label="post-refactor",
+        )
+
+        brief = generate_correction_brief(
+            tmp_db, wt_id, cycle_number=1,
+            trigger_error="ImportError: no module named db",
+        )
+
+        assert "## Last Checkpoint" in brief
+        assert "`deadbeef`" in brief
+        assert "`src/app.ts`" in brief
+
+    def test_generate_with_similar_errors(self, tmp_db: SessionDB):
+        """Similar errors from other worktrees should appear."""
+        from engram.correction_brief import generate_correction_brief
+
+        other_wt = tmp_db.create_worktree(
+            "feature/other", task_description="other worktree",
+        )
+        tmp_db.create_correction_cycle(
+            other_wt, 1,
+            trigger_error="CORS policy blocked request to API",
+            outcome="passed",
+        )
+
+        wt_id = tmp_db.create_worktree(
+            "feature/current", task_description="current worktree",
+        )
+        brief = generate_correction_brief(
+            tmp_db, wt_id, cycle_number=1,
+            trigger_error="CORS policy blocked request",
+        )
+
+        assert "## Similar Errors (Other Worktrees)" in brief
+        assert f"Worktree #{other_wt}" in brief
+
+
+class TestInjectCorrectionBrief:
+    def test_creates_claude_md(self, tmp_path):
+        from engram.correction_brief import inject_correction_brief
+
+        result = inject_correction_brief(
+            tmp_path, "# Test Brief\nSome content\n", cycle_number=1,
+        )
+
+        assert result["appended"] is False
+        assert result["cycle_number"] == 1
+
+        content = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "<!-- ENGRAM_CORRECTION_BRIEF:cycle_1 -->" in content
+        assert "# Test Brief" in content
+
+    def test_appends_to_existing_claude_md(self, tmp_path):
+        from engram.correction_brief import inject_correction_brief
+
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("# Existing Content\nKeep this.\n", encoding="utf-8")
+
+        result = inject_correction_brief(
+            tmp_path, "# Correction Brief\nNew stuff\n", cycle_number=2,
+        )
+
+        assert result["appended"] is True
+        content = claude_md.read_text(encoding="utf-8")
+        assert "# Existing Content" in content
+        assert "Keep this." in content
+        assert "<!-- ENGRAM_CORRECTION_BRIEF:cycle_2 -->" in content
+        assert "# Correction Brief" in content
+
+    def test_multiple_injections(self, tmp_path):
+        from engram.correction_brief import inject_correction_brief
+
+        inject_correction_brief(tmp_path, "Brief cycle 1", cycle_number=1)
+        inject_correction_brief(tmp_path, "Brief cycle 2", cycle_number=2)
+
+        content = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "<!-- ENGRAM_CORRECTION_BRIEF:cycle_1 -->" in content
+        assert "<!-- ENGRAM_CORRECTION_BRIEF:cycle_2 -->" in content
+        assert "Brief cycle 1" in content
+        assert "Brief cycle 2" in content
