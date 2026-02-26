@@ -96,6 +96,14 @@ def cmd_install(args: argparse.Namespace) -> None:
     stats = db.stats()
     print(f"\nKnowledge base: {stats['total_sessions']} sessions, {stats['total_messages']} messages, {stats['db_size_bytes'] / 1024:.0f} KB")
 
+    # Auto-wire MCP server
+    from .install_mcp import install_mcp_global
+    mcp_result = install_mcp_global()
+    if mcp_result["already_existed"]:
+        print(f"  MCP server: already configured in {mcp_result['path']}")
+    else:
+        print(f"  MCP server: registered in {mcp_result['path']}")
+
 
 def cmd_monitor(args: argparse.Namespace) -> None:
     """Show knowledge base stats, optionally watch with live indexing."""
@@ -484,6 +492,22 @@ def cmd_hook_handle(args: argparse.Namespace) -> None:
         print(json.dumps(result))
 
 
+def cmd_mcp_install(args: argparse.Namespace) -> None:
+    """Register engram MCP server with Claude Code."""
+    from .install_mcp import install_mcp_global, install_mcp_project
+
+    if args.project_dir:
+        result = install_mcp_project(args.project_dir)
+    else:
+        result = install_mcp_global()
+
+    if result["already_existed"]:
+        print(f"Engram MCP already configured in {result['path']}")
+    else:
+        print(f"Engram MCP server registered in {result['path']}")
+        print("Restart Claude Code to activate.")
+
+
 def cmd_mcp(args: argparse.Namespace) -> None:
     """Start the Engram MCP server (stdio transport)."""
     from engram.mcp_server import server
@@ -624,6 +648,14 @@ def main() -> None:
     # mcp
     p_mcp = subparsers.add_parser("mcp", help="Start Engram MCP server (stdio transport)")
     p_mcp.set_defaults(func=cmd_mcp)
+
+    # mcp install (standalone MCP wiring)
+    p_mcp_install = subparsers.add_parser("mcp-install", help="Register engram MCP server with Claude Code")
+    p_mcp_install.add_argument("--global", dest="global_install", action="store_true", default=True,
+                                help="Install to ~/.claude/settings.json (default)")
+    p_mcp_install.add_argument("--project", "-p", dest="project_dir",
+                                help="Install to project .mcp.json instead")
+    p_mcp_install.set_defaults(func=cmd_mcp_install)
 
     args = parser.parse_args()
     if not args.command:
