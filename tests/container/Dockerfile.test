@@ -1,0 +1,27 @@
+# Dockerfile for testing engram auto-sync with real session data.
+# Verifies the full lifecycle: install -> index -> hook -> search
+#
+# Build & run:
+#   podman build -f tests/container/Dockerfile.test -t engram-test .
+#   podman run --rm engram-test
+
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install engram from local source
+COPY pyproject.toml .
+COPY engram/ engram/
+COPY tests/ tests/
+
+RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || pip install --no-cache-dir -e .
+
+# Copy real session fixtures (from A/B experiment 003)
+# Session A: control (no engram) — web search for headless commands
+# Session B: treatment (with engram) — found commands via session history
+COPY tests/container/fixtures/ /root/.claude/projects/test-project/
+
+COPY tests/container/verify.sh /app/verify.sh
+RUN chmod +x /app/verify.sh
+
+CMD ["/app/verify.sh"]
