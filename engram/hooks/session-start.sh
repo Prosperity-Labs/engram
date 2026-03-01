@@ -1,12 +1,14 @@
 #!/bin/bash
 # Engram SessionStart hook for Claude Code
-# Auto-generates a slim brief into CLAUDE.md at session start.
-# Runs `engram brief --slim` and writes to the project's CLAUDE.md.
+# 1. Index any new sessions (incremental — skips already-indexed)
+# 2. Auto-generate a slim brief into CLAUDE.md
+#
+# Both steps are silent on failure so they never block session start.
 
-# Detect project root from CWD (Claude Code sets this)
+# Step 1: Incremental index (new sessions only, typically <2s)
+engram install --quiet 2>/dev/null || true
+
+# Step 2: Generate slim brief and write to CLAUDE.md
 PROJECT_ROOT="${PWD}"
 CLAUDE_MD="${PROJECT_ROOT}/CLAUDE.md"
-
-# Generate slim brief and write to CLAUDE.md
-# If engram fails (no data, not installed), silently skip
 engram brief --slim --output "${CLAUDE_MD}" 2>/dev/null || true

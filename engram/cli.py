@@ -22,6 +22,9 @@ def cmd_install(args: argparse.Namespace) -> None:
     from .adapters.claude_code import ClaudeCodeAdapter
     from .adapters.codex import CodexAdapter
 
+    quiet = getattr(args, "quiet", False)
+    log = (lambda *a, **kw: None) if quiet else print
+
     db = SessionDB()
     claude_adapter = ClaudeCodeAdapter()
     codex_adapter = CodexAdapter()
@@ -42,13 +45,13 @@ def cmd_install(args: argparse.Namespace) -> None:
         pass
 
     if not all_sessions:
-        print("No session files found.")
-        print("Start using Claude Code, Codex, or Cursor to generate sessions, then run this again.")
+        log("No session files found.")
+        log("Start using Claude Code, Codex, or Cursor to generate sessions, then run this again.")
         return
 
     sessions = [(agent, Path(p)) for agent, p in all_sessions]
-    print(f"Found {len(sessions)} session files")
-    print(f"Database: {db.db_path}\n")
+    log(f"Found {len(sessions)} session files")
+    log(f"Database: {db.db_path}\n")
 
     indexed = 0
     skipped = 0
@@ -60,7 +63,7 @@ def cmd_install(args: argparse.Namespace) -> None:
 
         if db.is_indexed(session_id):
             skipped += 1
-            print(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  (already indexed)")
+            log(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  (already indexed)")
             continue
 
         try:
@@ -80,29 +83,29 @@ def cmd_install(args: argparse.Namespace) -> None:
             msg_count = result["messages_indexed"]
             total_messages += msg_count
             indexed += 1
-            print(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  -> {msg_count} messages")
+            log(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  -> {msg_count} messages")
         except Exception as e:
-            print(f"  [{i}/{len(sessions)}] {session_id[:12]}...  ERROR: {e}")
+            log(f"  [{i}/{len(sessions)}] {session_id[:12]}...  ERROR: {e}")
 
-    print(f"\nDone: {indexed} sessions indexed ({total_messages} messages), {skipped} already indexed")
+    log(f"\nDone: {indexed} sessions indexed ({total_messages} messages), {skipped} already indexed")
 
     # Auto-extract artifacts so hooks have data to work with
     from .recall.artifact_extractor import ArtifactExtractor
     extractor = ArtifactExtractor(db)
-    print("\nExtracting artifacts...")
+    log("\nExtracting artifacts...")
     result = extractor.extract_all()
-    print(f"Artifacts: {result['artifacts_extracted']} extracted from {result['sessions_processed']} sessions")
+    log(f"Artifacts: {result['artifacts_extracted']} extracted from {result['sessions_processed']} sessions")
 
     stats = db.stats()
-    print(f"\nKnowledge base: {stats['total_sessions']} sessions, {stats['total_messages']} messages, {stats['db_size_bytes'] / 1024:.0f} KB")
+    log(f"\nKnowledge base: {stats['total_sessions']} sessions, {stats['total_messages']} messages, {stats['db_size_bytes'] / 1024:.0f} KB")
 
     # Auto-wire MCP server
     from .install_mcp import install_mcp_global
     mcp_result = install_mcp_global()
     if mcp_result["already_existed"]:
-        print(f"  MCP server: already configured in {mcp_result['path']}")
+        log(f"  MCP server: already configured in {mcp_result['path']}")
     else:
-        print(f"  MCP server: registered in {mcp_result['path']}")
+        log(f"  MCP server: registered in {mcp_result['path']}")
 
 
 def cmd_monitor(args: argparse.Namespace) -> None:
@@ -553,6 +556,8 @@ def main() -> None:
 
     # install
     p_install = subparsers.add_parser("install", help="Index all existing Claude Code sessions")
+    p_install.add_argument("--quiet", "-q", action="store_true",
+                            help="Suppress output (for use in hooks)")
     p_install.set_defaults(func=cmd_install)
 
     # monitor
