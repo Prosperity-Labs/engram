@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import vector_search
+
 
 _DEFAULT_DB_PATH = Path.home() / ".config" / "engram" / "sessions.db"
 
@@ -199,6 +201,8 @@ class SessionDB:
             conn.executescript(_SCHEMA_SQL)
             conn.executescript(_LOOPWRIGHT_SCHEMA_SQL)
             self._migrate(conn)
+            if vector_search.is_available():
+                vector_search.init_vec_table(conn)
 
     def _migrate(self, conn) -> None:
         """Add columns that may be missing from older databases."""
@@ -277,9 +281,21 @@ class SessionDB:
                     session.end_time,
                 ),
             )
+            if vector_search.is_available():
+                try:
+                    conn.execute(
+                        """DELETE FROM vec_messages
+                           WHERE message_id IN (
+                               SELECT id FROM messages WHERE session_id = ?
+                           )""",
+                        (session_id,),
+                    )
+                except Exception:
+                    pass
             conn.execute(
                 "DELETE FROM messages WHERE session_id = ?", (session_id,)
             )
+            new_messages: list[dict] = []
             if messages:
                 conn.executemany(
                     """INSERT INTO messages
@@ -303,6 +319,17 @@ class SessionDB:
                         for idx, m in enumerate(messages)
                     ],
                 )
+                rows = conn.execute(
+                    """SELECT id AS message_id, content
+                       FROM messages
+                       WHERE session_id = ?
+                       ORDER BY sequence""",
+                    (session_id,),
+                ).fetchall()
+                new_messages = [dict(row) for row in rows]
+
+            if vector_search.is_available() and new_messages:
+                vector_search.index_message_vectors(conn, new_messages)
 
         return {"session_id": session_id, "messages_indexed": len(messages)}
 
@@ -468,6 +495,8 @@ class SessionDB:
 
         sql = f"""
             SELECT
+                m.id AS message_id,
+                m.sequence,
                 m.session_id,
                 s.project,
                 m.role,
@@ -488,6 +517,8 @@ class SessionDB:
         with self._connect() as conn:
             for row in conn.execute(sql, params):
                 results.append({
+                    "message_id": row["message_id"],
+                    "sequence": row["sequence"],
                     "session_id": row["session_id"],
                     "project": row["project"],
                     "role": row["role"],
@@ -498,6 +529,20 @@ class SessionDB:
                     "rank": row["rank"],
                 })
         return results
+
+    def semantic_search(self, query: str, limit: int = 20) -> list[dict]:
+        """Hybrid semantic + keyword search with graceful fallback."""
+        fts_results = self.search(query, limit=limit)
+        if not vector_search.is_available():
+            return fts_results
+
+        with self._connect() as conn:
+            return vector_search.hybrid_search(
+                conn=conn,
+                query=query,
+                fts_results=fts_results,
+                limit=limit,
+            )
 
     def stats(self) -> dict:
         with self._connect() as conn:

@@ -59,6 +59,9 @@ def engram_search(
 
     db = _get_db()
     rewritten = rewrite_query(query)
+    from engram.recall import vector_search
+
+    search_fn = db.semantic_search if vector_search.is_available() else db.search
 
     # Search each keyword independently, collect all results
     all_results: dict[tuple, dict] = {}  # (session_id, sequence) → result
@@ -66,7 +69,7 @@ def engram_search(
 
     for fts_q in rewritten["fts_queries"]:
         try:
-            results = db.search(fts_q, limit=limit * 3)  # oversample for merging
+            results = search_fn(fts_q, limit=limit * 3)  # oversample for merging
         except Exception:
             continue  # skip keywords that FTS5 rejects
 

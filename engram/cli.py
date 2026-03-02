@@ -176,6 +176,59 @@ def cmd_search(args: argparse.Namespace) -> None:
         print()
 
 
+def cmd_embed(args: argparse.Namespace) -> None:
+    """Backfill semantic embeddings for all indexed messages."""
+    from .recall.session_db import SessionDB
+    from .recall import vector_search
+
+    if not vector_search.is_available():
+        print("Semantic dependencies are not installed. Run: pip install -e '.[semantic]'")
+        return
+
+    db = SessionDB()
+    batch_size = 64
+
+    with db._connect() as conn:
+        vector_search.init_vec_table(conn)
+
+        total_messages = conn.execute(
+            "SELECT COUNT(*) AS c FROM messages"
+        ).fetchone()["c"]
+
+        try:
+            rows = conn.execute(
+                """
+                SELECT m.id AS message_id, m.content
+                FROM messages m
+                LEFT JOIN vec_messages v ON v.message_id = m.id
+                WHERE m.content IS NOT NULL
+                  AND TRIM(m.content) != ''
+                  AND v.message_id IS NULL
+                ORDER BY m.id
+                """
+            ).fetchall()
+        except Exception:
+            print("Vector table is unavailable in this SQLite build.")
+            return
+
+        pending = [dict(row) for row in rows]
+        total_pending = len(pending)
+
+        if total_pending == 0:
+            print("No pending messages to embed.")
+            print(f"Total messages: {total_messages} | Embedded this run: 0")
+            return
+
+        embedded = 0
+        for start in range(0, total_pending, batch_size):
+            end = min(start + batch_size, total_pending)
+            embedded += vector_search.index_message_vectors(conn, pending[start:end])
+            print(f"Embedding messages... {end}/{total_pending}")
+
+    print(f"Done. Embedded {embedded} messages.")
+    print(f"Total messages: {total_messages} | Pending at start: {total_pending}")
+
+
 def cmd_costs(args: argparse.Namespace) -> None:
     """Show estimated costs per session."""
     from .recall.session_db import SessionDB
@@ -574,6 +627,10 @@ def main() -> None:
     p_search.add_argument("--role", choices=["user", "assistant", "summary"], help="Filter by role")
     p_search.add_argument("--session", help="Filter to a specific session ID")
     p_search.set_defaults(func=cmd_search)
+
+    # embed
+    p_embed = subparsers.add_parser("embed", help="Generate semantic embeddings for indexed messages")
+    p_embed.set_defaults(func=cmd_embed)
 
     # costs
     p_costs = subparsers.add_parser("costs", help="Show estimated token costs per session")
