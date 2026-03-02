@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 
-_MODEL_REPO = "pplx/pplx-embed-context-v1-0.6b"
+_MODEL_REPO = "perplexity-ai/pplx-embed-context-v1-0.6b"
 _EMBED_DIM = 1024
 _RRF_K = 60
 
@@ -51,7 +51,7 @@ def _empty_embeddings() -> Any:
     return np.zeros((0, _EMBED_DIM), dtype=np.int8)
 
 
-def load_model(model_name: str = "pplx-embed-context-v1-0.6b") -> tuple[Any, Any] | None:
+def load_model(model_name: str = "perplexity-ai/pplx-embed-context-v1-0.6b") -> tuple[Any, Any] | None:
     """Lazy-load tokenizer + ONNX session for the embed model."""
     del model_name  # fixed repo/path for now
 
@@ -70,7 +70,12 @@ def load_model(model_name: str = "pplx-embed-context-v1-0.6b") -> tuple[Any, Any
         return None
 
     try:
-        _MODEL_PATH = hf_hub_download(repo_id=_MODEL_REPO, filename="model.onnx")
+        _MODEL_PATH = hf_hub_download(repo_id=_MODEL_REPO, filename="onnx/model_quantized.onnx")
+        # Download data files that the ONNX model references
+        try:
+            hf_hub_download(repo_id=_MODEL_REPO, filename="onnx/model_quantized.onnx_data")
+        except Exception:
+            pass
         _TOKENIZER = AutoTokenizer.from_pretrained(_MODEL_REPO, trust_remote_code=True)
         _ORT_SESSION = ort.InferenceSession(_MODEL_PATH, providers=["CPUExecutionProvider"])
     except Exception:
@@ -243,7 +248,7 @@ def index_message_vectors(conn: Any, messages: list[dict]) -> int:
 
     try:
         conn.executemany(
-            "INSERT OR REPLACE INTO vec_messages(message_id, embedding) VALUES(?, ?)",
+            "INSERT OR REPLACE INTO vec_messages(message_id, embedding) VALUES(?, vec_int8(?))",
             payload,
         )
     except Exception:
@@ -273,7 +278,7 @@ def vector_search(conn: Any, query: str, limit: int = 20) -> list[dict]:
             """
             SELECT message_id, distance
             FROM vec_messages
-            WHERE embedding MATCH ?
+            WHERE embedding MATCH vec_int8(?)
             ORDER BY distance
             LIMIT ?
             """,
