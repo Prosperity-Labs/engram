@@ -5,7 +5,9 @@ from engram.brief import (
     _common_errors,
     _cost_profile,
     _key_files,
+    _next_steps,
     _project_overview,
+    _session_intents,
     generate_brief,
 )
 from engram.recall.artifact_extractor import ArtifactExtractor, _extract_error_message
@@ -35,22 +37,42 @@ def brief_db(tmp_db):
                 ),
             )
 
-            # Messages with tool calls
-            messages = [
-                (
-                    session_id,
-                    j,
-                    "assistant",
-                    f'{{"file_path": "/src/app.ts"}}' if j % 3 == 0 else f"Working on feature {j}",
-                    f"2026-02-{18+i}T10:{j:02d}:00Z",
-                    "Read" if j % 3 == 0 else ("Edit" if j % 3 == 1 else None),
-                    1000 * (j + 1),
-                    100 * (j + 1),
-                    500,
-                    0,
-                )
-                for j in range(10 + i * 5)
-            ]
+            # Messages with tool calls — alternate user/assistant roles
+            messages = []
+            msg_count = 10 + i * 5
+            for j in range(msg_count):
+                if j == 0:
+                    # First message is always user (provides intent)
+                    messages.append((
+                        session_id, j, "user",
+                        f"Add authentication to the user service (session {i})",
+                        f"2026-02-{18+i}T10:{j:02d}:00Z",
+                        None, 1000, 100, 500, 0,
+                    ))
+                elif j == msg_count - 1:
+                    # Last assistant message has forward-looking language
+                    messages.append((
+                        session_id, j, "assistant",
+                        "Next we should add rate limiting to the API endpoints. "
+                        "We also need to update the test suite for the new auth middleware.",
+                        f"2026-02-{18+i}T10:{j:02d}:00Z",
+                        None, 1000, 100, 500, 0,
+                    ))
+                elif j % 2 == 0:
+                    messages.append((
+                        session_id, j, "assistant",
+                        f'{{"file_path": "/src/app.ts"}}' if j % 4 == 0 else f"Working on feature {j}",
+                        f"2026-02-{18+i}T10:{j:02d}:00Z",
+                        "Read" if j % 4 == 0 else ("Edit" if j % 4 == 2 else None),
+                        1000 * (j + 1), 100 * (j + 1), 500, 0,
+                    ))
+                else:
+                    messages.append((
+                        session_id, j, "user",
+                        f"Continue with step {j}",
+                        f"2026-02-{18+i}T10:{j:02d}:00Z",
+                        None, 500, 50, 0, 0,
+                    ))
             conn.executemany(
                 """INSERT INTO messages
                    (session_id, sequence, role, content, timestamp,
@@ -160,9 +182,11 @@ class TestGenerateBrief:
     def test_markdown_output(self, brief_db):
         result = generate_brief(brief_db, "test-project", format="markdown")
         assert "# Project Brief: test-project" in result
-        assert "## Overview" in result
-        assert "## Key Files" in result
-        assert "## Cost Profile" in result
+        assert "## Intent" in result
+        assert "## Decisions" in result
+        assert "## Errors" in result
+        assert "## Current State" in result
+        assert "## Next Steps" in result
 
     def test_json_output(self, brief_db):
         import json
@@ -184,6 +208,31 @@ class TestGenerateBrief:
         result = generate_brief(brief_db, "nonexistent", format="markdown")
         assert "# Project Brief: nonexistent" in result
         assert "0" in result  # should show 0 sessions
+
+
+class TestSessionIntents:
+    def test_extracts_user_intents(self, brief_db):
+        result = _session_intents(brief_db, "test-project")
+        assert len(result) > 0
+        assert all(isinstance(s, str) for s in result)
+        # Should contain our seeded user messages
+        assert any("authentication" in intent.lower() for intent in result)
+
+    def test_empty_project(self, brief_db):
+        result = _session_intents(brief_db, "nonexistent")
+        assert result == []
+
+
+class TestNextSteps:
+    def test_extracts_forward_looking(self, brief_db):
+        result = _next_steps(brief_db, "test-project")
+        assert len(result) > 0
+        # Should find our seeded forward-looking message
+        assert any("rate limiting" in step.lower() or "need to" in step.lower() for step in result)
+
+    def test_empty_project(self, brief_db):
+        result = _next_steps(brief_db, "nonexistent")
+        assert result == []
 
 
 class TestExtractErrorMessage:
