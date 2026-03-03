@@ -80,6 +80,7 @@
 ### Known Bugs
 - [x] ~~Slim brief "Danger Zones" shows raw JSON instead of file paths~~ — fixed by correlating errors to files via session co-occurrence instead of matching error targets directly.
 - [ ] **Recurring Errors section shows raw JSON tool_use content.** Root cause: `ArtifactExtractor` stores `content[:200]` as `error.target` instead of extracting the actual error message. Fix belongs in `artifact_extractor.py`.
+- [ ] **🔴 P0: Subagent/Task tool calls are not indexed.** Claude Code delegates work to subagents (e.g. Explore with Sonnet 4.5) which can run 60+ tool calls. These are embedded as a single `tool_result` blob in the main session JSONL — engram indexes it as one message, losing all granular detail. In Experiment 004, only 22% of actual tool calls (18/82) were indexed. Fix: parse nested tool_use/tool_result content from Task results and index each subagent call as a separate artifact. This affects search recall, artifact extraction, and file history completeness.
 
 ### Improvements Needed
 - [ ] **Key Decisions pulls noise instead of real architecture decisions.** `_architecture_patterns()` uses keyword search ("chose", "decided", "because") which matches user messages, system prompts, and plan mode boilerplate. Needs: (a) filter to `role=assistant` only, (b) minimum content length, (c) exclude known boilerplate patterns like "Entered plan mode", "/compact".
