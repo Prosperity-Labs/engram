@@ -206,6 +206,10 @@ class LiveIndexer:
                             }
                         )
 
+            elif msg_type == "progress":
+                progress_msgs = self._parse_progress_entry(item)
+                parsed_messages.extend(progress_msgs)
+
             elif msg_type == "summary":
                 summary_text = self._extract_summary_content(item, message)
                 if summary_text:
@@ -221,6 +225,96 @@ class LiveIndexer:
                     )
 
         return parsed_messages
+
+    def _parse_progress_entry(self, item: dict) -> list[dict]:
+        """Extract messages from a subagent progress entry."""
+        data = item.get("data") or {}
+        if data.get("type") != "agent_progress":
+            return []
+
+        agent_id = data.get("agentId")
+        inner_msg_wrapper = data.get("message") or {}
+        inner_type = inner_msg_wrapper.get("type")  # "assistant" or "user"
+        timestamp = inner_msg_wrapper.get("timestamp") or item.get("timestamp")
+        inner_message = inner_msg_wrapper.get("message") or {}
+
+        results: list[dict] = []
+
+        if inner_type == "user":
+            content = self._extract_user_content(inner_message.get("content") or [])
+            if content:
+                results.append({
+                    "role": "user",
+                    "content": content,
+                    "timestamp": timestamp,
+                    "tool_name": None,
+                    "token_usage_in": None,
+                    "token_usage_out": None,
+                    "agent_id": agent_id,
+                })
+
+        elif inner_type == "assistant":
+            usage = inner_message.get("usage") or {}
+            token_in = (
+                int(usage.get("input_tokens") or 0)
+                + int(usage.get("cache_read_input_tokens") or 0)
+                + int(usage.get("cache_creation_input_tokens") or 0)
+            )
+            token_out = int(usage.get("output_tokens") or 0)
+
+            content_blocks = inner_message.get("content") or []
+            if isinstance(content_blocks, str):
+                results.append({
+                    "role": "assistant",
+                    "content": content_blocks,
+                    "timestamp": timestamp,
+                    "tool_name": None,
+                    "token_usage_in": token_in,
+                    "token_usage_out": token_out,
+                    "agent_id": agent_id,
+                })
+                return results
+
+            for block in content_blocks:
+                if isinstance(block, str):
+                    results.append({
+                        "role": "assistant",
+                        "content": block,
+                        "timestamp": timestamp,
+                        "tool_name": None,
+                        "token_usage_in": token_in,
+                        "token_usage_out": token_out,
+                        "agent_id": agent_id,
+                    })
+                    token_in, token_out = 0, 0
+                    continue
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                text = ""
+                tool_name = None
+
+                if block_type == "text":
+                    text = self._coerce_text(block.get("text"))
+                elif block_type == "thinking":
+                    text = self._coerce_text(block.get("thinking") or block.get("text"))
+                elif block_type == "tool_use":
+                    tool_name = self._coerce_text(block.get("name")) or None
+                    text = self._coerce_text(block.get("input"))
+
+                if text:
+                    results.append({
+                        "role": "assistant",
+                        "content": text,
+                        "timestamp": timestamp,
+                        "tool_name": tool_name,
+                        "token_usage_in": token_in,
+                        "token_usage_out": token_out,
+                        "agent_id": agent_id,
+                    })
+                    token_in, token_out = 0, 0
+
+        return results
 
     def _ensure_session(self, filepath: Path, session_id: str):
         project_raw = filepath.parent.name

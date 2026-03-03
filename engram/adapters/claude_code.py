@@ -32,9 +32,12 @@ class ClaudeCodeAdapter(AgentAdapter):
                     continue
 
                 raw_events.append(entry)
-                turn = self.parse_event(entry)
-                if turn is not None:
-                    turns.append(turn)
+                result = self.parse_event(entry)
+                if result is not None:
+                    if isinstance(result, list):
+                        turns.extend(result)
+                    else:
+                        turns.append(result)
 
         timestamps = [t.timestamp for t in turns if t.timestamp]
         start_time = min(timestamps) if timestamps else None
@@ -51,8 +54,8 @@ class ClaudeCodeAdapter(AgentAdapter):
             raw_events=raw_events,
         )
 
-    def parse_event(self, event: dict) -> Turn | None:
-        """Parse a single JSONL event dict into a Turn."""
+    def parse_event(self, event: dict) -> Turn | list[Turn] | None:
+        """Parse a single JSONL event dict into a Turn (or list of Turns for progress)."""
         entry_type = event.get("type")
         ts = event.get("timestamp")
         message = event.get("message") or {}
@@ -82,6 +85,9 @@ class ClaudeCodeAdapter(AgentAdapter):
 
         if entry_type == "summary":
             return self._parse_summary(event, message, ts, **token_kwargs)
+
+        if entry_type == "progress":
+            return self._parse_progress(event)
 
         return None
 
@@ -188,6 +194,46 @@ class ClaudeCodeAdapter(AgentAdapter):
             cache_read_tokens=cache_read_tokens,
             cache_create_tokens=cache_create_tokens,
         )
+
+    def _parse_progress(self, event: dict) -> list[Turn]:
+        """Parse a progress event containing subagent messages."""
+        data = event.get("data") or {}
+        if data.get("type") != "agent_progress":
+            return []
+
+        agent_id = data.get("agentId")
+        inner_msg_wrapper = data.get("message") or {}
+        inner_type = inner_msg_wrapper.get("type")  # "assistant" or "user"
+        ts = inner_msg_wrapper.get("timestamp") or event.get("timestamp")
+        inner_message = inner_msg_wrapper.get("message") or {}
+
+        usage = inner_message.get("usage") or {}
+        input_tokens = int(usage.get("input_tokens") or 0)
+        cache_read = int(usage.get("cache_read_input_tokens") or 0)
+        cache_create = int(usage.get("cache_creation_input_tokens") or 0)
+        tokens_out = int(usage.get("output_tokens") or 0)
+
+        token_kwargs = {
+            "token_usage_in": input_tokens,
+            "token_usage_out": tokens_out,
+            "cache_read_tokens": cache_read,
+            "cache_create_tokens": cache_create,
+        }
+
+        turns: list[Turn] = []
+
+        if inner_type == "assistant":
+            turn = self._parse_assistant(inner_message, ts, **token_kwargs)
+            if turn is not None:
+                turn.agent_id = agent_id
+                turns.append(turn)
+        elif inner_type == "user":
+            turn = self._parse_user(inner_message, ts)
+            if turn is not None:
+                turn.agent_id = agent_id
+                turns.append(turn)
+
+        return turns
 
     def _parse_summary(
         self,

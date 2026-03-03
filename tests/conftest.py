@@ -127,6 +127,142 @@ def claude_code_session(tmp_path):
 
 
 @pytest.fixture
+def claude_code_session_with_subagent(tmp_path):
+    """Create a Claude Code JSONL session with subagent (Task/Explore) progress entries."""
+    session_id = "test-subagent-session-001"
+    filepath = tmp_path / "projects" / "test-project" / f"{session_id}.jsonl"
+    filepath.parent.mkdir(parents=True)
+
+    events = [
+        # Main agent user message
+        {
+            "type": "user",
+            "timestamp": "2026-03-03T17:12:00.000Z",
+            "message": {
+                "content": [{"type": "text", "text": "Find all API endpoints in the codebase"}],
+                "usage": {},
+            },
+        },
+        # Main agent launches Task tool
+        {
+            "type": "assistant",
+            "timestamp": "2026-03-03T17:12:05.000Z",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "I'll search the codebase for API endpoints."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01Main",
+                        "name": "Task",
+                        "input": {"prompt": "Find all API endpoints", "subagent_type": "Explore"},
+                    },
+                ],
+                "usage": {"input_tokens": 2000, "output_tokens": 300},
+            },
+        },
+        # Subagent progress: assistant with Grep tool call
+        {
+            "type": "progress",
+            "parentToolUseID": "toolu_01Main",
+            "data": {
+                "type": "agent_progress",
+                "agentId": "a2b9d82",
+                "message": {
+                    "type": "assistant",
+                    "timestamp": "2026-03-03T17:13:00.000Z",
+                    "message": {
+                        "model": "claude-sonnet-4-5-20250929",
+                        "content": [
+                            {"type": "text", "text": "Let me search for route definitions."},
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_sub_001",
+                                "name": "Grep",
+                                "input": {"pattern": "app\\.(get|post|put|delete)\\(", "glob": "**/*.ts"},
+                            },
+                        ],
+                        "usage": {"input_tokens": 500, "output_tokens": 100},
+                    },
+                },
+            },
+        },
+        # Subagent progress: user (tool result)
+        {
+            "type": "progress",
+            "parentToolUseID": "toolu_01Main",
+            "data": {
+                "type": "agent_progress",
+                "agentId": "a2b9d82",
+                "message": {
+                    "type": "user",
+                    "timestamp": "2026-03-03T17:13:05.000Z",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_sub_001",
+                                "content": "src/routes/api.ts:15: app.get('/users')\nsrc/routes/api.ts:30: app.post('/users')",
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+        # Subagent progress: assistant with Read tool call
+        {
+            "type": "progress",
+            "parentToolUseID": "toolu_01Main",
+            "data": {
+                "type": "agent_progress",
+                "agentId": "a2b9d82",
+                "message": {
+                    "type": "assistant",
+                    "timestamp": "2026-03-03T17:13:10.000Z",
+                    "message": {
+                        "model": "claude-sonnet-4-5-20250929",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_sub_002",
+                                "name": "Read",
+                                "input": {"file_path": "/src/routes/api.ts"},
+                            },
+                        ],
+                        "usage": {"input_tokens": 800, "output_tokens": 50},
+                    },
+                },
+            },
+        },
+        # Non-agent progress (should be ignored)
+        {
+            "type": "progress",
+            "parentToolUseID": "toolu_01Main",
+            "data": {
+                "type": "tool_progress",
+                "content": "Processing...",
+            },
+        },
+        # Main agent continues after subagent completes
+        {
+            "type": "assistant",
+            "timestamp": "2026-03-03T17:14:00.000Z",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Found 2 API endpoints in the codebase."},
+                ],
+                "usage": {"input_tokens": 3000, "output_tokens": 200},
+            },
+        },
+    ]
+
+    with open(filepath, "w") as f:
+        for event in events:
+            f.write(json.dumps(event) + "\n")
+
+    return filepath
+
+
+@pytest.fixture
 def codex_session(tmp_path):
     """Create a minimal Codex JSONL session file."""
     session_id = "019c-test-codex-session"

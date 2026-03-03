@@ -213,6 +213,8 @@ class SessionDB:
             conn.execute("ALTER TABLE messages ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
         if "cache_create_tokens" not in message_columns:
             conn.execute("ALTER TABLE messages ADD COLUMN cache_create_tokens INTEGER DEFAULT 0")
+        if "agent_id" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN agent_id TEXT")
 
         worktree_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(worktrees)").fetchall()
@@ -301,8 +303,8 @@ class SessionDB:
                     """INSERT INTO messages
                        (session_id, sequence, role, content, timestamp,
                         tool_name, token_usage_in, token_usage_out,
-                        cache_read_tokens, cache_create_tokens)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        cache_read_tokens, cache_create_tokens, agent_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     [
                         (
                             session_id,
@@ -315,6 +317,7 @@ class SessionDB:
                             m.get("token_usage_out", 0),
                             m.get("cache_read_tokens", 0),
                             m.get("cache_create_tokens", 0),
+                            m.get("agent_id"),
                         )
                         for idx, m in enumerate(messages)
                     ],
@@ -438,6 +441,7 @@ class SessionDB:
                 m.get("token_usage_out", 0),
                 m.get("cache_read_tokens", 0),
                 m.get("cache_create_tokens", 0),
+                m.get("agent_id"),
             )
             for i, m in enumerate(messages)
         ]
@@ -447,8 +451,8 @@ class SessionDB:
                 """INSERT OR REPLACE INTO messages
                    (session_id, sequence, role, content, timestamp,
                     tool_name, token_usage_in, token_usage_out,
-                    cache_read_tokens, cache_create_tokens)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cache_read_tokens, cache_create_tokens, agent_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
             conn.execute(

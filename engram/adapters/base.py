@@ -30,6 +30,7 @@ class Turn:
     token_usage_out: int = 0
     cache_read_tokens: int = 0
     cache_create_tokens: int = 0
+    agent_id: str | None = None
 
 
 @dataclass
@@ -81,6 +82,7 @@ class EngramSession:
                 "token_usage_out": turn.token_usage_out,
                 "cache_read_tokens": turn.cache_read_tokens,
                 "cache_create_tokens": turn.cache_create_tokens,
+                "agent_id": turn.agent_id,
             }
             if not turn.tool_calls:
                 messages.append({**base, "content": turn.content, "tool_name": None})
@@ -100,6 +102,7 @@ class EngramSession:
                         "content": input_str,
                         "timestamp": turn.timestamp,
                         "tool_name": tc.name,
+                        "agent_id": turn.agent_id,
                         **zero_tokens,
                     })
         return messages
