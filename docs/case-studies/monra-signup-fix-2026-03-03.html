@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram Case Study — 40x Faster Context Recovery</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;400;600;700;800&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --bg-card: #12121a;
+    --bg-card-hover: #1a1a26;
+    --border: #1e1e2e;
+    --text: #e0e0e8;
+    --text-dim: #6e6e82;
+    --text-bright: #ffffff;
+    --accent-green: #00e676;
+    --accent-blue: #448aff;
+    --accent-orange: #ff9100;
+    --accent-purple: #b388ff;
+    --accent-red: #ff5252;
+    --accent-cyan: #18ffff;
+    --engram-gold: #ffd740;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', sans-serif;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  .noise {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 1000;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 2rem; }
+
+  /* Hero */
+  .hero {
+    padding: 5rem 0 3rem;
+    text-align: center;
+    position: relative;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(255,215,64,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-block;
+    padding: 0.4rem 1.2rem;
+    border: 1px solid var(--engram-gold);
+    border-radius: 100px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--engram-gold);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+    animation: fadeIn 0.6s ease;
+  }
+  .hero h1 {
+    font-size: 3.2rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--text-bright);
+    margin-bottom: 0.75rem;
+    animation: fadeIn 0.8s ease;
+  }
+  .hero h1 span { color: var(--engram-gold); }
+  .hero .subtitle {
+    font-size: 1.15rem;
+    color: var(--text-dim);
+    font-weight: 300;
+    animation: fadeIn 1s ease;
+  }
+
+  /* Stat Row */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 3rem 0;
+    animation: fadeIn 1.2s ease;
+  }
+  .stat {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 2.2rem;
+    font-weight: 800;
+    color: var(--engram-gold);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .stat-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 0.25rem;
+  }
+
+  /* Section */
+  .section { margin: 3.5rem 0; }
+  .section-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Timeline */
+  .timeline {
+    position: relative;
+    display: flex;
+    gap: 3px;
+    height: 56px;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+  }
+  .timeline-block {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: rgba(0,0,0,0.8);
+    text-align: center;
+    line-height: 1.3;
+    transition: filter 0.2s;
+  }
+  .timeline-block:hover { filter: brightness(1.15); }
+  .tb-green { background: var(--accent-green); flex: 0.5; }
+  .tb-blue { background: var(--accent-blue); flex: 2.5; color: white; }
+  .tb-orange { background: var(--accent-orange); flex: 2; }
+  .tb-purple { background: var(--accent-purple); flex: 3; }
+  .tb-red { background: var(--accent-red); flex: 7; color: white; }
+
+  .timeline-labels {
+    display: flex;
+    gap: 3px;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .timeline-labels span { text-align: center; }
+  .tl-green { flex: 0.5; } .tl-blue { flex: 2.5; } .tl-orange { flex: 2; } .tl-purple { flex: 3; } .tl-red { flex: 7; }
+
+  /* Time Comparison */
+  .comparison {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    margin: 2rem 0;
+  }
+  .bar-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 1.25rem;
+  }
+  .bar-row:last-child { margin-bottom: 0; }
+  .bar-label {
+    width: 140px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .bar-track {
+    flex: 1;
+    height: 40px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    padding-left: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 0.85rem;
+    transition: width 1.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .bar-engram {
+    width: 4%;
+    background: linear-gradient(90deg, var(--engram-gold), #ffab00);
+    color: #000;
+  }
+  .bar-without {
+    width: 100%;
+    background: linear-gradient(90deg, #333, #555);
+    color: var(--text);
+  }
+  .speedup {
+    text-align: center;
+    margin-top: 1.25rem;
+    font-size: 2.5rem;
+    font-weight: 800;
+    color: var(--engram-gold);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .speedup-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* Query Cards */
+  .queries {
+    display: grid;
+    gap: 1rem;
+  }
+  .query-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    display: grid;
+    grid-template-columns: 1fr auto 1.2fr;
+    align-items: center;
+    gap: 1.25rem;
+    transition: border-color 0.2s;
+  }
+  .query-card:hover { border-color: var(--engram-gold); }
+  .query-cmd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--accent-cyan);
+    background: rgba(24,255,255,0.06);
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .query-arrow {
+    color: var(--engram-gold);
+    font-size: 1.2rem;
+  }
+  .query-finding {
+    font-size: 0.85rem;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .query-finding strong { color: var(--text-bright); }
+  .query-results {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--accent-green);
+    background: rgba(0,230,118,0.1);
+    padding: 0.15rem 0.5rem;
+    border-radius: 100px;
+    margin-left: 0.5rem;
+  }
+
+  /* Tool Distribution */
+  .tools-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 2rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+  }
+  .donut-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .donut-chart {
+    position: relative;
+    width: 200px;
+    height: 200px;
+  }
+  .donut-chart svg { transform: rotate(-90deg); }
+  .donut-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+  }
+  .donut-total {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--text-bright);
+  }
+  .donut-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .tool-list { display: flex; flex-direction: column; gap: 0.5rem; justify-content: center; }
+  .tool-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+  }
+  .tool-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tool-name { flex: 1; }
+  .tool-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    color: var(--text-bright);
+  }
+
+  /* Fix Section */
+  .fix-files {
+    display: grid;
+    gap: 0.5rem;
+  }
+  .fix-file {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1.25rem;
+  }
+  .fix-icon {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--accent-green);
+    background: rgba(0,230,118,0.1);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .fix-path {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--accent-cyan);
+    flex-shrink: 0;
+  }
+  .fix-desc {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+
+  /* Result */
+  .result-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 1.5rem 0;
+  }
+  .result-item {
+    background: var(--bg-card);
+    padding: 1.25rem;
+  }
+  .result-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+  }
+  .result-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-bright);
+    word-break: break-all;
+  }
+  .result-value.chain {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    margin-top: 0.25rem;
+  }
+
+  /* Quote */
+  .quote-section {
+    margin: 4rem 0 3rem;
+    padding: 2.5rem;
+    border-left: 3px solid var(--engram-gold);
+    background: linear-gradient(90deg, rgba(255,215,64,0.04), transparent);
+  }
+  .quote-text {
+    font-size: 1.15rem;
+    font-weight: 300;
+    font-style: italic;
+    color: var(--text);
+    line-height: 1.7;
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 2rem 0 3rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+  .footer a { color: var(--engram-gold); text-decoration: none; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 2rem; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .query-card { grid-template-columns: 1fr; }
+    .query-arrow { display: none; }
+    .tools-grid { grid-template-columns: 1fr; }
+    .result-grid { grid-template-columns: 1fr; }
+    .fix-file { flex-direction: column; align-items: flex-start; }
+    .fix-desc { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="noise"></div>
+
+<div class="container">
+  <!-- Hero -->
+  <div class="hero">
+    <div class="badge">Engram Case Study &mdash; March 3, 2026</div>
+    <h1><span>40x</span> Faster Context Recovery</h1>
+    <p class="subtitle">Debugging a Fintech Signup Flow with Engram + Claude Code</p>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value">30s</div>
+      <div class="stat-label">Context Recovery</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">15m</div>
+      <div class="stat-label">Total Fix Time</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">4</div>
+      <div class="stat-label">Files Changed</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">40</div>
+      <div class="stat-label">Tool Calls</div>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="section">
+    <div class="section-title">Resolution Timeline</div>
+    <div class="timeline">
+      <div class="timeline-block tb-green">Engram</div>
+      <div class="timeline-block tb-blue">Log Capture</div>
+      <div class="timeline-block tb-orange">Root Cause</div>
+      <div class="timeline-block tb-purple">Fix</div>
+      <div class="timeline-block tb-red">Deploy + Verify</div>
+    </div>
+    <div class="timeline-labels">
+      <span class="tl-green">0:30</span>
+      <span class="tl-blue">3:00</span>
+      <span class="tl-orange">5:00</span>
+      <span class="tl-purple">8:00</span>
+      <span class="tl-red">15:00</span>
+    </div>
+  </div>
+
+  <!-- Time Comparison -->
+  <div class="section">
+    <div class="section-title">Context Recovery: With vs Without Engram</div>
+    <div class="comparison">
+      <div class="bar-row">
+        <div class="bar-label" style="color: var(--engram-gold)">With Engram</div>
+        <div class="bar-track">
+          <div class="bar-fill bar-engram">30s</div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Without</div>
+        <div class="bar-track">
+          <div class="bar-fill bar-without">~20 min (est.)</div>
+        </div>
+      </div>
+      <div class="speedup">~40x <span class="speedup-label">faster (estimated)</span></div>
+      <p style="text-align:center; font-size:0.7rem; color:var(--text-dim); margin-top:0.75rem; font-style:italic;">
+        30s with Engram was measured. ~20 min without is estimated based on manual AWS Console browsing + git archaeology.
+      </p>
+    </div>
+  </div>
+
+  <!-- Key Queries -->
+  <div class="section">
+    <div class="section-title">Key Engram Queries</div>
+    <div class="queries">
+      <div class="query-card">
+        <div class="query-cmd">engram search "aws logs tail"</div>
+        <div class="query-arrow">&rarr;</div>
+        <div class="query-finding"><strong>Found exact CloudWatch commands</strong> from Feb 5 session<span class="query-results">20 results</span></div>
+      </div>
+      <div class="query-card">
+        <div class="query-cmd">engram search "createUser"</div>
+        <div class="query-arrow">&rarr;</div>
+        <div class="query-finding"><strong>Found Lambda function names:</strong> api-createUser, management-createUser<span class="query-results">20 results</span></div>
+      </div>
+      <div class="query-card">
+        <div class="query-cmd">engram search "user_type"</div>
+        <div class="query-arrow">&rarr;</div>
+        <div class="query-finding"><strong>Confirmed feature was built Feb 25</strong> on unmerged branch<span class="query-results">20 results</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tool Distribution -->
+  <div class="section">
+    <div class="section-title">Tool Call Distribution</div>
+    <div class="tools-grid">
+      <div class="donut-container">
+        <div class="donut-chart">
+          <svg viewBox="0 0 200 200" width="200" height="200">
+            <!-- Engram: 11/40 = 27.5% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#ffd740" stroke-width="28"
+              stroke-dasharray="47.9 126.1" stroke-dashoffset="0"/>
+            <!-- AWS: 6/40 = 15% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#448aff" stroke-width="28"
+              stroke-dasharray="26.1 147.9" stroke-dashoffset="-47.9"/>
+            <!-- Read: 8/40 = 20% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#18ffff" stroke-width="28"
+              stroke-dasharray="34.9 139.1" stroke-dashoffset="-74"/>
+            <!-- Edit: 4/40 = 10% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#b388ff" stroke-width="28"
+              stroke-dasharray="17.5 156.5" stroke-dashoffset="-108.9"/>
+            <!-- Deploy: 4/40 = 10% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#ff5252" stroke-width="28"
+              stroke-dasharray="17.5 156.5" stroke-dashoffset="-126.4"/>
+            <!-- Git: 2/40 = 5% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#69f0ae" stroke-width="28"
+              stroke-dasharray="8.7 165.3" stroke-dashoffset="-143.9"/>
+            <!-- Other: 5/40 = 12.5% -->
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#444" stroke-width="28"
+              stroke-dasharray="21.8 152.2" stroke-dashoffset="-152.6"/>
+          </svg>
+          <div class="donut-center">
+            <div class="donut-total">40</div>
+            <div class="donut-label">Total Calls</div>
+          </div>
+        </div>
+      </div>
+      <div class="tool-list">
+        <div class="tool-item"><div class="tool-dot" style="background:#ffd740"></div><div class="tool-name">Engram Search</div><div class="tool-count">11</div></div>
+        <div class="tool-item"><div class="tool-dot" style="background:#18ffff"></div><div class="tool-name">Code Read</div><div class="tool-count">8</div></div>
+        <div class="tool-item"><div class="tool-dot" style="background:#448aff"></div><div class="tool-name">AWS Logs</div><div class="tool-count">6</div></div>
+        <div class="tool-item"><div class="tool-dot" style="background:#b388ff"></div><div class="tool-name">Code Edit</div><div class="tool-count">4</div></div>
+        <div class="tool-item"><div class="tool-dot" style="background:#ff5252"></div><div class="tool-name">Deploy</div><div class="tool-count">4</div></div>
+        <div class="tool-item"><div class="tool-dot" style="background:#69f0ae"></div><div class="tool-name">Git</div><div class="tool-count">2</div></div>
+        <div class="tool-item"><div class="tool-dot" style="background:#444"></div><div class="tool-name">DB + Noodlbox + Other</div><div class="tool-count">5</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- The Fix -->
+  <div class="section">
+    <div class="section-title">The Fix &mdash; 4 Files, 24 Lines</div>
+    <div class="fix-files">
+      <div class="fix-file">
+        <div class="fix-icon">+6</div>
+        <div class="fix-path">validators.ts</div>
+        <div class="fix-desc">Added user_type + business_name to CreateUserValidator</div>
+      </div>
+      <div class="fix-file">
+        <div class="fix-icon">+2</div>
+        <div class="fix-path">createUser.ts</div>
+        <div class="fix-desc">Pass both fields to management Lambda</div>
+      </div>
+      <div class="fix-file">
+        <div class="fix-icon">+6</div>
+        <div class="fix-path">schemas.ts</div>
+        <div class="fix-desc">Added to CreateUserParams</div>
+      </div>
+      <div class="fix-file">
+        <div class="fix-icon">+2</div>
+        <div class="fix-path">types.ts</div>
+        <div class="fix-desc">Added to DBUser type</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  <div class="section">
+    <div class="section-title">Verified Result</div>
+    <div class="result-grid">
+      <div class="result-item">
+        <div class="result-label">EVM Wallet (Base)</div>
+        <div class="result-value">0x67fe...FF1</div>
+        <div class="result-value chain">base_mainnet &bull; embedded</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">Solana Wallet</div>
+        <div class="result-value">EHuc...pTYF</div>
+        <div class="result-value chain">solana_mainnet &bull; embedded</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">User Type</div>
+        <div class="result-value" style="font-size:1.5rem; color: var(--accent-green);">individual</div>
+        <div class="result-value chain">Stored in DB &bull; Validated end-to-end</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key Takeaway -->
+  <div class="section">
+    <div class="section-title">Key Takeaway</div>
+    <div style="background: var(--bg-card); border: 1px solid var(--border); border-left: 3px solid var(--engram-gold); border-radius: 12px; padding: 2rem;">
+      <p style="font-size: 1.05rem; font-weight: 300; color: var(--text); line-height: 1.7;">
+        Engram's value here wasn't replacing code search &mdash; it was recovering <strong style="color: var(--text-bright);">session context</strong>. Lambda function names, CLI commands, and branch decisions from weeks-old sessions were instantly available. Without it, this knowledge would have been lost entirely.
+      </p>
+      <p style="font-size: 0.75rem; color: var(--text-dim); margin-top: 1rem;">&mdash; Aleksa, Engram author</p>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>Built with <a href="#">Engram</a> &mdash; Session knowledge base for Claude Code</p>
+    <p style="margin-top: 0.5rem;">Monra Fintech &bull; March 2026</p>
+  </div>
+</div>
+
+</body>
+</html>

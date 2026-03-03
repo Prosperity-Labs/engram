@@ -166,35 +166,33 @@ This task was chosen because:
 #### Session A — Control (cold start, no engram)
 
 ```bash
-# 1. Create isolated worktree
-cd /tmp
-git clone ~/Desktop/development/monra monra-control
-cd monra-control
+# Use the experiment runner script:
+bash ~/Desktop/development/engram/docs/experiments/004-run-experiment.sh a
 
-# 2. Disable engram MCP server in settings
-# 3. Start Claude Code
-claude --mcp-config '{}'
-
-# 4. Paste the task prompt and record metrics below
-# STOP the session once it starts editing — measure context recovery, not fix time
+# Or manually:
+git clone --recurse-submodules ~/Desktop/development/monra.app /tmp/monra-control
+cd /tmp/monra-control
+claude --mcp-config /tmp/004-empty-mcp.json --strict-mcp-config
+# Paste the task prompt
 ```
 
 #### Session B — Treatment (with engram)
 
 ```bash
-# 1. Wait 5 minutes after Session A (cache gap)
-# 2. Create isolated worktree
-cd /tmp
-git clone ~/Desktop/development/monra monra-engram
-cd monra-engram
+# Wait 5 minutes after Session A (cache gap)
+# Use the experiment runner script:
+bash ~/Desktop/development/engram/docs/experiments/004-run-experiment.sh b
 
-# 3. Re-enable engram MCP server
-# 4. Start Claude Code normally
-claude
-
-# 5. Paste the same task prompt and record metrics below
-# STOP the session once it starts editing
+# Or manually:
+git clone --recurse-submodules ~/Desktop/development/monra.app /tmp/monra-engram
+cd /tmp/monra-engram
+claude  # engram MCP from ~/.claude/settings.json will be loaded
+# Paste the same task prompt
 ```
+
+> **Important**: Verify engram MCP connects successfully before proceeding.
+> Claude Code should show engram tools available (no "MCP server failed" message).
+> If it fails, check: `which engram`, `engram mcp --help`, and that `~/.local/bin` is on PATH.
 
 ### Metrics
 
@@ -215,38 +213,46 @@ claude
 - **Same prompt**: Identical task prompt pasted verbatim
 - **Stop at first edit**: Measures context recovery speed, not fix quality
 
-### Session A Results
+### Session A Results (Run 1 — 2026-03-03)
 
 ```
-Start time:
-Turn # identifying 4 target files:
-Turn # finding Lambda names:
-Exploration tool calls:
-Discovered unmerged branch:
-First edit time:
-Wall-clock to first edit:
-Notes:
+Start time: ~11:47 UTC
+Turn # identifying target files: 2 (found handlers.ts quickly via grep)
+Turn # finding Lambda names: 1 (found createUser handler directly)
+Exploration tool calls: ~8 (Glob, Grep, Read)
+Discovered unmerged branch: No
+First edit time: ~11:49 UTC
+Wall-clock to first edit: ~2m 18s
+Notes: Partial fix only — added user_type/business_name to handler parameter pass-through
+        in handlers.ts (2 lines). Did NOT find the db.ts wallet_address column issue.
+        No MCP servers loaded (control).
 ```
 
-### Session B Results
+### Session B Results (Run 1 — 2026-03-03, INVALID)
 
 ```
-Start time:
-Turn # identifying 4 target files:
-Turn # finding Lambda names:
-Exploration tool calls:
-Discovered unmerged branch:
-First edit time:
-Wall-clock to first edit:
-Notes:
+Start time: ~11:50 UTC
+Turn # identifying target files: 3 (explored more broadly)
+Turn # finding Lambda names: 2
+Exploration tool calls: ~12 (Glob, Grep, Read)
+Discovered unmerged branch: No
+First edit time: ~11:53 UTC
+Wall-clock to first edit: ~3m 15s
+Notes: INVALID TEST — "1 MCP server failed" at startup. Engram MCP did not load,
+        so this was effectively another control session. Agent found a deeper bug
+        (wallet_address column stored in wallets table, not users table) and fixed
+        db.ts with JOIN query + destructuring. More thorough but no recall advantage.
+        Root cause: bash --rcfile skipped .bashrc, potentially losing PATH to engram.
 ```
 
-### Phase 2B Verdict
+### Phase 2B Verdict (Run 1 — INVALID, needs re-run)
 
-- [ ] Engram session found target files sooner
-- [ ] Engram session used fewer exploration calls
-- [ ] Engram session discovered unmerged branch work
-- [ ] Engram session reached first edit faster
+- [ ] Engram session found target files sooner — **N/A** (MCP failed)
+- [ ] Engram session used fewer exploration calls — **N/A**
+- [ ] Engram session discovered unmerged branch work — **N/A**
+- [ ] Engram session reached first edit faster — **N/A**
+
+> **Action**: Re-run with fixed `004-run-experiment.sh` (sources .bashrc, pre-flight MCP check).
 
 ---
 

@@ -76,7 +76,7 @@ END;
 _LOOPWRIGHT_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS worktrees (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id      TEXT REFERENCES sessions(session_id),
+    session_id      TEXT,
     branch_name     TEXT NOT NULL,
     base_branch     TEXT NOT NULL DEFAULT 'main',
     status          TEXT NOT NULL DEFAULT 'active'
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
 CREATE TABLE IF NOT EXISTS checkpoints (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     worktree_id         INTEGER NOT NULL REFERENCES worktrees(id),
-    session_id          TEXT REFERENCES sessions(session_id),
+    session_id          TEXT,
     git_sha             TEXT,
     test_results        TEXT,    -- JSON
     artifact_snapshot   TEXT,    -- JSON

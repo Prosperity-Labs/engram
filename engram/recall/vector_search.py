@@ -44,6 +44,15 @@ def is_available() -> bool:
     return _import_sqlite_vec() is not None and _import_onnxruntime() is not None
 
 
+def has_embeddings(conn: Any) -> bool:
+    """Return True if vec_messages table exists and has at least one row."""
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM vec_messages").fetchone()
+        return row is not None and row[0] > 0
+    except Exception:
+        return False
+
+
 def _empty_embeddings() -> Any:
     np = _import_numpy()
     if np is None:

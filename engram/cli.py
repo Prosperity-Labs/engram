@@ -63,7 +63,6 @@ def cmd_install(args: argparse.Namespace) -> None:
 
         if db.is_indexed(session_id):
             skipped += 1
-            log(f"  [{i}/{len(sessions)}] {session_id[:12]}...  {size_kb:>7.0f} KB  (already indexed)")
             continue
 
         try:
@@ -570,6 +569,19 @@ def cmd_mcp(args: argparse.Namespace) -> None:
     server.run()
 
 
+def cmd_trail(args: argparse.Namespace) -> None:
+    """Show artifact trail for a Claude Code session."""
+    from .artifact_trail import parse_session_trail, find_session_jsonl, format_trail
+
+    jsonl_path = find_session_jsonl(args.session_id)
+    if not jsonl_path:
+        print(f"Session {args.session_id} not found", file=sys.stderr)
+        raise SystemExit(1)
+
+    events = parse_session_trail(jsonl_path)
+    print(format_trail(events))
+
+
 def cmd_reindex(args: argparse.Namespace) -> None:
     """Re-index all sessions to backfill granular token data."""
     from pathlib import Path
@@ -710,6 +722,11 @@ def main() -> None:
     # mcp
     p_mcp = subparsers.add_parser("mcp", help="Start Engram MCP server (stdio transport)")
     p_mcp.set_defaults(func=cmd_mcp)
+
+    # trail
+    p_trail = subparsers.add_parser("trail", help="Show artifact trail for a Claude Code session")
+    p_trail.add_argument("session_id", help="Session ID (or prefix) to show trail for")
+    p_trail.set_defaults(func=cmd_trail)
 
     # mcp install (standalone MCP wiring)
     p_mcp_install = subparsers.add_parser("mcp-install", help="Register engram MCP server with Claude Code")

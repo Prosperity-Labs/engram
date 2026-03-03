@@ -63,6 +63,17 @@ def test_is_available_true_when_installed(semantic_env):
     assert vector_search.is_available() is True
 
 
+def test_has_embeddings_false_when_no_table():
+    conn = _make_db()
+    assert vector_search.has_embeddings(conn) is False
+
+
+def test_has_embeddings_false_when_empty(semantic_env):
+    conn = _make_db()
+    vector_search.init_vec_table(conn)
+    assert vector_search.has_embeddings(conn) is False
+
+
 def test_encode_int8_shape_and_dtype(monkeypatch, semantic_env):
     np = semantic_env
 
