@@ -3,6 +3,9 @@
 Converts conversational queries into effective search terms.
 No LLM required — uses stopword removal, synonym expansion, and
 compound keyword detection.
+
+Also detects "recall intent" — when users reference past work
+("we figured this out", "how did we do X", "what was the command for").
 """
 
 from __future__ import annotations
@@ -117,3 +120,49 @@ def rewrite_query(query: str) -> dict:
         "expanded": expanded,
         "fts_queries": fts_queries,
     }
+
+
+# ── Recall Intent Detection ─────────────────────────────────────────
+
+# Patterns that signal the user is referencing past work.
+# Each pattern captures the "topic" portion after the recall phrase.
+_RECALL_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bwe (?:already |previously )?(?:figured|worked|solved|did|fixed|handled|implemented|set up|built|wrote|discussed) (?:this |that |it )?(?:out )?(.*)", re.I),
+    re.compile(r"\bwe did this before\b[:\s]*(.*)", re.I),
+    re.compile(r"\bhow did (?:we|I|you) (?:do|fix|solve|handle|implement|set up|configure|build|write) (.*)", re.I),
+    re.compile(r"\bwhat was the (?:command|approach|solution|fix|way|method|pattern|code) (?:for|to|we used for) (.*)", re.I),
+    re.compile(r"\bremember (?:when|how) (?:we|I|you) (.*)", re.I),
+    re.compile(r"\bwe['\u2019]ve (?:done|seen|had) this (?:before)?\b[:\s]*(.*)", re.I),
+    re.compile(r"\blast time (?:we|I|you) (.*)", re.I),
+    re.compile(r"\bdidn['\u2019]t (?:we|I|you) (?:already )?(.*)", re.I),
+    re.compile(r"\bwasn['\u2019]t there (?:a|an|some) (.*)", re.I),
+]
+
+
+def detect_recall_intent(text: str) -> dict | None:
+    """Detect if text contains a recall-intent phrase.
+
+    Returns:
+        None if no recall intent detected.
+        Otherwise: {"match": str, "topic": str, "keywords": list[str]}
+        where topic is the extracted subject after the recall phrase,
+        and keywords are the meaningful search terms.
+    """
+    text = text.strip()
+    for pattern in _RECALL_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            # The captured group is the topic portion
+            topic = m.group(m.lastindex or 1).strip().rstrip("?.,!")
+            if not topic:
+                # Pattern matched but no topic captured — use full text
+                topic = text
+            keywords = extract_keywords(topic)
+            if not keywords:
+                keywords = extract_keywords(text)
+            return {
+                "match": m.group(0).strip(),
+                "topic": topic,
+                "keywords": keywords,
+            }
+    return None

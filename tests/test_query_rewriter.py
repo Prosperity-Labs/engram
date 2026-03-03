@@ -1,7 +1,12 @@
 """Tests for natural language query rewriting."""
 
 import pytest
-from engram.query_rewriter import extract_keywords, expand_keywords, rewrite_query
+from engram.query_rewriter import (
+    detect_recall_intent,
+    expand_keywords,
+    extract_keywords,
+    rewrite_query,
+)
 
 
 class TestExtractKeywords:
@@ -79,3 +84,61 @@ class TestRewriteQuery:
             kw in result["expanded"]
             for kw in ["auth", "login", "JWT"]
         )
+
+
+class TestDetectRecallIntent:
+    def test_we_figured_this_out(self):
+        r = detect_recall_intent("we already figured out the auth token refresh")
+        assert r is not None
+        assert "auth" in r["keywords"] or "token" in r["keywords"]
+        assert r["topic"]  # should have extracted the topic
+
+    def test_how_did_we_do(self):
+        r = detect_recall_intent("how did we do the database migration?")
+        assert r is not None
+        assert "database" in r["keywords"] or "migration" in r["keywords"]
+
+    def test_what_was_the_command_for(self):
+        r = detect_recall_intent("what was the command for deploying to staging?")
+        assert r is not None
+        assert "deploying" in r["keywords"] or "staging" in r["keywords"]
+
+    def test_we_did_this_before(self):
+        r = detect_recall_intent("we did this before: configuring the webhook")
+        assert r is not None
+        assert "configuring" in r["keywords"] or "webhook" in r["keywords"]
+
+    def test_remember_when(self):
+        r = detect_recall_intent("remember when we fixed the escrow timeout bug?")
+        assert r is not None
+        assert "escrow" in r["keywords"] or "timeout" in r["keywords"]
+
+    def test_didnt_we_already(self):
+        r = detect_recall_intent("didn't we already solve the rate limiting issue?")
+        assert r is not None
+        assert "rate" in r["keywords"] or "limiting" in r["keywords"]
+
+    def test_last_time_we(self):
+        r = detect_recall_intent("last time we configured the CI pipeline it broke")
+        assert r is not None
+        assert "configured" in r["keywords"] or "pipeline" in r["keywords"]
+
+    def test_we_solved_this(self):
+        r = detect_recall_intent("we solved this — the JWT expiry problem")
+        assert r is not None
+        assert "jwt" in r["keywords"] or "expiry" in r["keywords"]
+
+    def test_no_recall_intent(self):
+        assert detect_recall_intent("please add a login button") is None
+        assert detect_recall_intent("fix the bug in auth.py") is None
+        assert detect_recall_intent("what is the current time?") is None
+
+    def test_wasnt_there(self):
+        r = detect_recall_intent("wasn't there a script for bulk embedding?")
+        assert r is not None
+        assert "script" in r["keywords"] or "embedding" in r["keywords"]
+
+    def test_we_ve_done_this(self):
+        r = detect_recall_intent("we've done this before with the proxy setup")
+        assert r is not None
+        assert "proxy" in r["keywords"] or "setup" in r["keywords"]
