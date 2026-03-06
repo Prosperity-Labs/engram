@@ -14,5 +14,9 @@ docs/internal/
 # Local design assets
 design system.html
 
+# Unrelated project artifacts
+.openclaw/
+.openclaw-logs/
+
 # A/B test worktree configs (don't commit test-specific settings)
 .claude/settings.json
