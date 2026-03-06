@@ -17,6 +17,11 @@ design system.html
 # Unrelated project artifacts
 .openclaw/
 .openclaw-logs/
+.loopwright/
+
+# WIP docs and tests
+docs/data-analysis-2026-03-05.md
+tests/test_session_count.py
 
 # A/B test worktree configs (don't commit test-specific settings)
 .claude/settings.json
