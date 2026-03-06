@@ -8,5 +8,8 @@ build/
 .venv/
 *.db
 
+# Internal docs (strategy, marketing, private case studies)
+docs/internal/
+
 # A/B test worktree configs (don't commit test-specific settings)
 .claude/settings.json
