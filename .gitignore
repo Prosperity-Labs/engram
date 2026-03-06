@@ -11,5 +11,8 @@ build/
 # Internal docs (strategy, marketing, private case studies)
 docs/internal/
 
+# Local design assets
+design system.html
+
 # A/B test worktree configs (don't commit test-specific settings)
 .claude/settings.json
