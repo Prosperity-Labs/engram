@@ -619,6 +619,97 @@ def cmd_graph_algo(args: argparse.Namespace) -> None:
     print(json.dumps(results, indent=2, default=str))
 
 
+def cmd_proxy_start(args: argparse.Namespace) -> None:
+    """Start the Engram proxy server."""
+    from engram.proxy.start import start_proxy
+    start_proxy(port=args.port, verbose=args.verbose)
+
+
+def cmd_proxy_stats(args: argparse.Namespace) -> None:
+    """Show proxy call statistics."""
+    import sqlite3
+    from pathlib import Path
+
+    db_path = Path.home() / ".config" / "engram" / "sessions.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    try:
+        row = conn.execute("""
+            SELECT COUNT(*) AS calls,
+                   COALESCE(SUM(input_tokens), 0) AS total_in,
+                   COALESCE(SUM(output_tokens), 0) AS total_out,
+                   COALESCE(SUM(cache_read_tokens), 0) AS total_cache_read,
+                   COALESCE(SUM(cost_estimate_usd), 0) AS total_cost,
+                   MIN(timestamp) AS first_call,
+                   MAX(timestamp) AS last_call
+            FROM proxy_calls
+        """).fetchone()
+    except sqlite3.OperationalError:
+        print("No proxy data yet. Start the proxy first: engram proxy start")
+        return
+    finally:
+        conn.close()
+
+    if row["calls"] == 0:
+        print("No proxy calls recorded yet.")
+        return
+
+    print("Engram Proxy Stats")
+    print("=" * 40)
+    print(f"  Total calls:       {row['calls']:,}")
+    print(f"  Input tokens:      {row['total_in']:,}")
+    print(f"  Output tokens:     {row['total_out']:,}")
+    print(f"  Cache read tokens: {row['total_cache_read']:,}")
+    print(f"  Total cost:        ${row['total_cost']:.4f}")
+    print(f"  First call:        {row['first_call']}")
+    print(f"  Last call:         {row['last_call']}")
+
+
+def cmd_proxy_calls(args: argparse.Namespace) -> None:
+    """Show recent proxy calls."""
+    import sqlite3
+    from pathlib import Path
+
+    db_path = Path.home() / ".config" / "engram" / "sessions.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    try:
+        rows = conn.execute("""
+            SELECT timestamp, model, input_tokens, output_tokens,
+                   cache_read_tokens, cost_estimate_usd, tools_used,
+                   stop_reason, project
+            FROM proxy_calls
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (args.limit,)).fetchall()
+    except sqlite3.OperationalError:
+        print("No proxy data yet. Start the proxy first: engram proxy start")
+        return
+    finally:
+        conn.close()
+
+    if not rows:
+        print("No proxy calls recorded yet.")
+        return
+
+    print(f"Last {len(rows)} proxy calls:")
+    print()
+    for r in reversed(rows):
+        model = (r["model"] or "?").split("-")[-1][:12]
+        tools = json.loads(r["tools_used"]) if r["tools_used"] else []
+        tools_str = ",".join(tools[:3]) if tools else "-"
+        proj = r["project"] or "?"
+        print(
+            f"  {r['timestamp'][:19]}  {model:<12} "
+            f"in={r['input_tokens']:>7,} out={r['output_tokens']:>6,} "
+            f"cache={r['cache_read_tokens']:>7,} "
+            f"${r['cost_estimate_usd']:.4f} "
+            f"[{tools_str}] {proj}"
+        )
+
+
 def cmd_trail(args: argparse.Namespace) -> None:
     """Show artifact trail for a Claude Code session."""
     from .artifact_trail import parse_session_trail, find_session_jsonl, format_trail
@@ -764,6 +855,20 @@ def main() -> None:
                                   help="Also install SessionStart hook to auto-generate CLAUDE.md")
     p_hooks_install.set_defaults(func=cmd_hooks_install)
     p_hooks.set_defaults(func=lambda args: p_hooks.print_help())
+
+    # proxy
+    p_proxy = subparsers.add_parser("proxy", help="Engram proxy — intercept and log AI agent API calls")
+    proxy_sub = p_proxy.add_subparsers(dest="proxy_command")
+    p_proxy_start = proxy_sub.add_parser("start", help="Start the proxy server")
+    p_proxy_start.add_argument("--port", type=int, default=9080, help="Listen port (default: 9080)")
+    p_proxy_start.add_argument("--verbose", "-v", action="store_true", help="Show mitmproxy output")
+    p_proxy_start.set_defaults(func=cmd_proxy_start)
+    p_proxy_stats = proxy_sub.add_parser("stats", help="Show proxy call statistics")
+    p_proxy_stats.set_defaults(func=cmd_proxy_stats)
+    p_proxy_calls = proxy_sub.add_parser("calls", help="Show recent intercepted calls")
+    p_proxy_calls.add_argument("--limit", "-n", type=int, default=20, help="Number of calls to show (default: 20)")
+    p_proxy_calls.set_defaults(func=cmd_proxy_calls)
+    p_proxy.set_defaults(func=lambda args: p_proxy.print_help())
 
     # hook-handle (hidden — called by the shell script)
     p_hook_handle = subparsers.add_parser("hook-handle", help=argparse.SUPPRESS)
