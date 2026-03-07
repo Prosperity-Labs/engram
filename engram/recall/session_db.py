@@ -548,6 +548,18 @@ class SessionDB:
                 limit=limit,
             )
 
+    def session_count(self, project: str | None = None) -> int:
+        """Return the number of indexed sessions, optionally filtered by project."""
+        with self._connect() as conn:
+            if project is not None:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM sessions WHERE project = ?",
+                    (project,),
+                ).fetchone()
+            else:
+                row = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()
+            return row["c"]
+
     def stats(self) -> dict:
         with self._connect() as conn:
             s = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()

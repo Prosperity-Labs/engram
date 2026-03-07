@@ -569,6 +569,56 @@ def cmd_mcp(args: argparse.Namespace) -> None:
     server.run()
 
 
+def cmd_graph_load(args: argparse.Namespace) -> None:
+    """Load Engram data into Memgraph knowledge graph."""
+    try:
+        from engram.graph import GraphLoader, get_driver
+    except ImportError:
+        print("Graph dependencies not installed. Run: pip install -e '.[graph]'")
+        sys.exit(1)
+
+    try:
+        driver = get_driver(args.bolt_uri)
+        driver.verify_connectivity()
+    except Exception as e:
+        print(f"Cannot connect to Memgraph at {args.bolt_uri}: {e}")
+        print("Start Memgraph: docker run -d --name engram-memgraph -p 7687:7687 memgraph/memgraph-mage:latest")
+        sys.exit(1)
+
+    loader = GraphLoader(driver, db_path=args.db_path)
+    print(f"Loading graph from {loader.db_path}...")
+
+    counts = loader.load_all(project=args.project)
+    driver.close()
+
+    print("\nGraph loaded:")
+    for label, count in counts.items():
+        print(f"  {label}: {count}")
+    print(f"\nTotal: {sum(counts.values())} nodes/edges created or updated")
+
+
+def cmd_graph_algo(args: argparse.Namespace) -> None:
+    """Run graph algorithms on the Memgraph knowledge graph."""
+    try:
+        from engram.graph import get_driver
+        from engram.graph.algorithms import run_algorithms
+    except ImportError:
+        print("Graph dependencies not installed. Run: pip install -e '.[graph]'")
+        sys.exit(1)
+
+    try:
+        driver = get_driver(args.bolt_uri)
+        driver.verify_connectivity()
+    except Exception as e:
+        print(f"Cannot connect to Memgraph at {args.bolt_uri}: {e}")
+        sys.exit(1)
+
+    results = run_algorithms(driver, algorithm=args.algorithm)
+    driver.close()
+
+    print(json.dumps(results, indent=2, default=str))
+
+
 def cmd_trail(args: argparse.Namespace) -> None:
     """Show artifact trail for a Claude Code session."""
     from .artifact_trail import parse_session_trail, find_session_jsonl, format_trail
@@ -735,6 +785,19 @@ def main() -> None:
     p_mcp_install.add_argument("--project", "-p", dest="project_dir",
                                 help="Install to project .mcp.json instead")
     p_mcp_install.set_defaults(func=cmd_mcp_install)
+
+    # graph-load
+    p_graph_load = subparsers.add_parser("graph-load", help="Load data into Memgraph knowledge graph")
+    p_graph_load.add_argument("--bolt-uri", default="bolt://localhost:7687", help="Memgraph Bolt URI (default: bolt://localhost:7687)")
+    p_graph_load.add_argument("--db-path", default=None, help="SQLite DB path (default: ~/.config/engram/sessions.db)")
+    p_graph_load.add_argument("--project", "-p", help="Filter to a specific project")
+    p_graph_load.set_defaults(func=cmd_graph_load)
+
+    # graph-algo
+    p_graph_algo = subparsers.add_parser("graph-algo", help="Run graph algorithms (PageRank, community detection)")
+    p_graph_algo.add_argument("--bolt-uri", default="bolt://localhost:7687", help="Memgraph Bolt URI (default: bolt://localhost:7687)")
+    p_graph_algo.add_argument("--algorithm", "-a", choices=["pagerank", "community", "shortest-path", "all"], default="all", help="Algorithm to run (default: all)")
+    p_graph_algo.set_defaults(func=cmd_graph_algo)
 
     args = parser.parse_args()
     if not args.command:

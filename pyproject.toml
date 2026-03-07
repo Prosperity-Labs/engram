@@ -19,6 +19,9 @@ semantic = [
     "transformers>=4.40.0",
     "numpy>=1.24.0",
 ]
+graph = [
+    "neo4j>=5.20.0",
+]
 
 [project.scripts]
 engram = "engram.cli:main"
