@@ -94,6 +94,14 @@ class EngramInterceptor:
         self._total_cost = 0.0
         self._pending: dict[str, dict] = {}  # flow.id -> request data
 
+    def requestheaders(self, flow: http.HTTPFlow) -> None:
+        """Disable streaming so we can read full request/response bodies."""
+        flow.request.stream = False
+
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        """Disable response streaming so we can read the full body."""
+        flow.response.stream = False
+
     def _ensure_schema(self) -> None:
         """Create proxy_calls table if it doesn't exist."""
         schema_path = Path(__file__).parent / "schema.sql"
@@ -150,6 +158,11 @@ class EngramInterceptor:
             body = json.loads(flow.request.content)
         except (json.JSONDecodeError, TypeError):
             return
+
+        # Disable streaming so we get a single JSON response we can parse
+        if body.get("stream"):
+            body["stream"] = False
+            flow.request.content = json.dumps(body).encode()
 
         # Extract request metadata
         model = body.get("model", "unknown")

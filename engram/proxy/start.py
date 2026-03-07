@@ -35,7 +35,6 @@ def start_proxy(port: int = 9080, verbose: bool = False) -> None:
         sys.executable, "-m", "mitmproxy.tools.main",
         "--mode", f"reverse:https://api.anthropic.com",
         "--listen-port", str(port),
-        "--set", "stream_large_bodies=0",  # don't stream — we need full body
         "-s", str(interceptor_path),
         "--quiet",  # suppress mitmproxy's own output
     ]
