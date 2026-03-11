@@ -1,6 +1,7 @@
 """Engram proxy interceptor — mitmproxy addon for Anthropic API calls.
 
-Logs every request/response pair to SQLite. Phase 1: observe only, no modification.
+Logs every request/response pair to SQLite and optionally enriches system
+prompts with project context (Phase 2: system prompt enrichment).
 
 Usage with mitmproxy reverse proxy mode:
     mitmdump --mode reverse:https://api.anthropic.com --listen-port 9080 \
@@ -13,8 +14,10 @@ Then point Claude Code at the proxy:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,6 +96,11 @@ class EngramInterceptor:
         self._total_output = 0
         self._total_cost = 0.0
         self._pending: dict[str, dict] = {}  # flow.id -> request data
+        # Phase 2: enrichment
+        self._enrich = os.environ.get("ENGRAM_ENRICH", "1") != "0"
+        self._enrichment_cache: dict[str, tuple[str, float]] = {}  # project -> (block, timestamp)
+        self._cache_ttl = 1800  # 30 min
+        self._db = None  # lazy-init SessionDB
 
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Disable streaming so we can read full request/response bodies."""
@@ -103,14 +111,47 @@ class EngramInterceptor:
         flow.response.stream = False
 
     def _ensure_schema(self) -> None:
-        """Create proxy_calls table if it doesn't exist."""
+        """Create proxy_calls table if it doesn't exist, and run migrations."""
         schema_path = Path(__file__).parent / "schema.sql"
         conn = sqlite3.connect(self.db_path)
         try:
             conn.executescript(schema_path.read_text())
+            # Migration: add enrichment_variant column to existing tables
+            try:
+                conn.execute("ALTER TABLE proxy_calls ADD COLUMN enrichment_variant TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
             conn.commit()
         finally:
             conn.close()
+
+    def _get_enrichment(self, project: str) -> str | None:
+        """Get enrichment block for a project, with caching.
+
+        Returns the enrichment string or None. Never raises — enrichment
+        failure must not block API calls.
+        """
+        if not project:
+            return None
+        try:
+            # Check cache
+            if project in self._enrichment_cache:
+                block, cached_at = self._enrichment_cache[project]
+                if time.time() - cached_at < self._cache_ttl:
+                    return block
+
+            # Lazy-init SessionDB (import here to avoid import at mitmproxy load time)
+            if self._db is None:
+                from engram.recall.session_db import SessionDB
+                self._db = SessionDB()
+
+            from engram.proxy.enrichment import build_enrichment
+            block = build_enrichment(project, self._db)
+            self._enrichment_cache[project] = (block, time.time())
+            return block
+        except Exception:
+            return None
 
     def _save_call(self, data: dict) -> None:
         """Insert a proxy call record into SQLite."""
@@ -122,8 +163,8 @@ class EngramInterceptor:
                     (id, timestamp, model, system_prompt_tokens, message_count,
                      input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                      cost_estimate_usd, tools_used, stop_reason, session_id, project,
-                     request_bytes, response_bytes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     request_bytes, response_bytes, enrichment_variant)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data["id"],
@@ -142,6 +183,7 @@ class EngramInterceptor:
                     data.get("project"),
                     data.get("request_bytes", 0),
                     data.get("response_bytes", 0),
+                    data.get("enrichment_variant"),
                 ),
             )
             conn.commit()
@@ -184,6 +226,21 @@ class EngramInterceptor:
         # Project detection
         project = _extract_project(body)
 
+        # Phase 2: enrich system prompt with project context
+        enrichment_variant = None
+        if self._enrich and project and body.get("system"):
+            enrichment = self._get_enrichment(project)
+            if enrichment:
+                if isinstance(body.get("system"), list):
+                    body["system"].append({"type": "text", "text": enrichment})
+                elif isinstance(body.get("system"), str):
+                    body["system"] = body["system"] + "\n\n" + enrichment
+                enrichment_variant = "v1_slim"
+                # Re-encode body with enrichment
+                flow.request.content = json.dumps(body).encode()
+                # Update system token estimate to include enrichment
+                system_tokens += _estimate_tokens(enrichment)
+
         # Store pending request data keyed by flow id
         self._pending[flow.id] = {
             "id": str(uuid.uuid4()),
@@ -194,6 +251,7 @@ class EngramInterceptor:
             "available_tools": available_tools,
             "project": project,
             "request_bytes": len(flow.request.content) if flow.request.content else 0,
+            "enrichment_variant": enrichment_variant,
         }
 
     def response(self, flow: http.HTTPFlow) -> None:
@@ -257,6 +315,7 @@ class EngramInterceptor:
         if len(tools_used) > 3:
             tools_str += f"+{len(tools_used)-3}"
         proj = call_data.get("project") or "?"
+        enrich_tag = "+E" if call_data.get("enrichment_variant") else ""
 
         print(
             f"[{self._call_count:>4}] {model_short:<10} "
@@ -265,7 +324,7 @@ class EngramInterceptor:
             f"${cost:.4f} "
             f"tools=[{tools_str}] "
             f"stop={stop_reason} "
-            f"proj={proj}"
+            f"proj={proj}{enrich_tag}"
         )
 
 
