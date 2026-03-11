@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS proxy_calls (
     session_id TEXT,       -- link to session if detectable
     project TEXT,          -- detect from system prompt or cwd
     request_bytes INTEGER,
-    response_bytes INTEGER
+    response_bytes INTEGER,
+    enrichment_variant TEXT       -- NULL=baseline, 'v1_slim'=enriched
 );
 
 CREATE INDEX IF NOT EXISTS idx_proxy_calls_timestamp ON proxy_calls(timestamp);

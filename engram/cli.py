@@ -622,7 +622,7 @@ def cmd_graph_algo(args: argparse.Namespace) -> None:
 def cmd_proxy_start(args: argparse.Namespace) -> None:
     """Start the Engram proxy server."""
     from engram.proxy.start import start_proxy
-    start_proxy(port=args.port, verbose=args.verbose)
+    start_proxy(port=args.port, verbose=args.verbose, enrich=not args.no_enrich)
 
 
 def cmd_proxy_stats(args: argparse.Namespace) -> None:
@@ -708,6 +708,12 @@ def cmd_proxy_calls(args: argparse.Namespace) -> None:
             f"${r['cost_estimate_usd']:.4f} "
             f"[{tools_str}] {proj}"
         )
+
+
+def cmd_proxy_report(args: argparse.Namespace) -> None:
+    """Show enrichment comparison report."""
+    from engram.proxy.report import generate_report
+    print(generate_report(project=args.project))
 
 
 def cmd_trail(args: argparse.Namespace) -> None:
@@ -862,12 +868,16 @@ def main() -> None:
     p_proxy_start = proxy_sub.add_parser("start", help="Start the proxy server")
     p_proxy_start.add_argument("--port", type=int, default=9080, help="Listen port (default: 9080)")
     p_proxy_start.add_argument("--verbose", "-v", action="store_true", help="Show mitmproxy output")
+    p_proxy_start.add_argument("--no-enrich", action="store_true", help="Disable system prompt enrichment")
     p_proxy_start.set_defaults(func=cmd_proxy_start)
     p_proxy_stats = proxy_sub.add_parser("stats", help="Show proxy call statistics")
     p_proxy_stats.set_defaults(func=cmd_proxy_stats)
     p_proxy_calls = proxy_sub.add_parser("calls", help="Show recent intercepted calls")
     p_proxy_calls.add_argument("--limit", "-n", type=int, default=20, help="Number of calls to show (default: 20)")
     p_proxy_calls.set_defaults(func=cmd_proxy_calls)
+    p_proxy_report = proxy_sub.add_parser("report", help="Compare baseline vs. enriched calls")
+    p_proxy_report.add_argument("--project", "-p", help="Filter to a specific project")
+    p_proxy_report.set_defaults(func=cmd_proxy_report)
     p_proxy.set_defaults(func=lambda args: p_proxy.print_help())
 
     # hook-handle (hidden — called by the shell script)
