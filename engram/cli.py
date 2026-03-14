@@ -622,7 +622,90 @@ def cmd_graph_algo(args: argparse.Namespace) -> None:
 def cmd_proxy_start(args: argparse.Namespace) -> None:
     """Start the Engram proxy server."""
     from engram.proxy.start import start_proxy
-    start_proxy(port=args.port, verbose=args.verbose, enrich=not args.no_enrich)
+    start_proxy(
+        port=args.port, verbose=args.verbose, enrich=not args.no_enrich,
+        timeout=args.timeout, max_concurrent=args.max_concurrent,
+        max_buffer_mb=args.max_buffer_mb,
+    )
+
+
+def cmd_proxy_install(args: argparse.Namespace) -> None:
+    """Install engram proxy as a systemd user service."""
+    import shutil
+    from pathlib import Path
+
+    bun_bin = shutil.which("bun")
+    if not bun_bin:
+        print("ERROR: bun not found in PATH. Install: https://bun.sh", file=sys.stderr)
+        sys.exit(1)
+
+    server_ts = Path(__file__).parent / "proxy" / "bun" / "server.ts"
+    if not server_ts.exists():
+        print(f"ERROR: server.ts not found at {server_ts}", file=sys.stderr)
+        sys.exit(1)
+
+    port = args.port
+    service_name = "engram-proxy"
+
+    unit = f"""\
+[Unit]
+Description=Engram Proxy — AI agent API call interceptor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={bun_bin} run {server_ts} --port {port}
+Restart=on-failure
+RestartSec=5
+Environment=HOME={Path.home()}
+Environment=PATH={Path(bun_bin).parent}:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+"""
+
+    systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    systemd_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = systemd_dir / f"{service_name}.service"
+    unit_path.write_text(unit)
+
+    print(f"Wrote {unit_path}")
+
+    # Reload and enable
+    import subprocess
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
+
+    if args.now:
+        subprocess.run(["systemctl", "--user", "start", service_name], check=True)
+        print(f"\n{service_name} started on port {port}.")
+    else:
+        print(f"\n{service_name} enabled. Start with:")
+        print(f"  systemctl --user start {service_name}")
+
+    print(f"\nUsage:")
+    print(f"  export ANTHROPIC_BASE_URL=http://localhost:{port}")
+    print(f"  systemctl --user status {service_name}")
+    print(f"  journalctl --user -u {service_name} -f")
+
+
+def cmd_proxy_uninstall(args: argparse.Namespace) -> None:
+    """Remove engram proxy systemd user service."""
+    import subprocess
+    from pathlib import Path
+
+    service_name = "engram-proxy"
+    unit_path = Path.home() / ".config" / "systemd" / "user" / f"{service_name}.service"
+
+    if not unit_path.exists():
+        print(f"{service_name} is not installed.")
+        return
+
+    subprocess.run(["systemctl", "--user", "stop", service_name], check=False)
+    subprocess.run(["systemctl", "--user", "disable", service_name], check=False)
+    unit_path.unlink()
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    print(f"{service_name} stopped, disabled, and removed.")
 
 
 def cmd_proxy_stats(args: argparse.Namespace) -> None:
@@ -869,6 +952,9 @@ def main() -> None:
     p_proxy_start.add_argument("--port", type=int, default=9080, help="Listen port (default: 9080)")
     p_proxy_start.add_argument("--verbose", "-v", action="store_true", help="Show mitmproxy output")
     p_proxy_start.add_argument("--no-enrich", action="store_true", help="Disable system prompt enrichment")
+    p_proxy_start.add_argument("--timeout", type=int, default=120, help="Upstream fetch timeout in seconds (default: 120)")
+    p_proxy_start.add_argument("--max-concurrent", type=int, default=50, help="Max concurrent /v1/messages requests (default: 50)")
+    p_proxy_start.add_argument("--max-buffer-mb", type=int, default=50, help="Max streaming buffer in MB (default: 50)")
     p_proxy_start.set_defaults(func=cmd_proxy_start)
     p_proxy_stats = proxy_sub.add_parser("stats", help="Show proxy call statistics")
     p_proxy_stats.set_defaults(func=cmd_proxy_stats)
@@ -878,6 +964,12 @@ def main() -> None:
     p_proxy_report = proxy_sub.add_parser("report", help="Compare baseline vs. enriched calls")
     p_proxy_report.add_argument("--project", "-p", help="Filter to a specific project")
     p_proxy_report.set_defaults(func=cmd_proxy_report)
+    p_proxy_install = proxy_sub.add_parser("install", help="Install proxy as a systemd user service")
+    p_proxy_install.add_argument("--port", type=int, default=9080, help="Listen port (default: 9080)")
+    p_proxy_install.add_argument("--now", action="store_true", help="Start the service immediately after installing")
+    p_proxy_install.set_defaults(func=cmd_proxy_install)
+    p_proxy_uninstall = proxy_sub.add_parser("uninstall", help="Remove proxy systemd user service")
+    p_proxy_uninstall.set_defaults(func=cmd_proxy_uninstall)
     p_proxy.set_defaults(func=lambda args: p_proxy.print_help())
 
     # hook-handle (hidden — called by the shell script)
