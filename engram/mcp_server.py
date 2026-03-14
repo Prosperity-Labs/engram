@@ -68,7 +68,8 @@ def engram_search(
     rewritten = rewrite_query(query)
     from engram.recall import vector_search
 
-    use_semantic = vector_search.is_available() and vector_search.has_embeddings(db.conn)
+    with db._connect() as conn:
+        use_semantic = vector_search.is_available() and vector_search.has_embeddings(conn)
     search_fn = db.semantic_search if use_semantic else db.search
 
     # Search each keyword independently, collect all results
@@ -169,7 +170,8 @@ def engram_recall(
 
     from engram.recall import vector_search
 
-    use_semantic = vector_search.is_available() and vector_search.has_embeddings(db.conn)
+    with db._connect() as conn:
+        use_semantic = vector_search.is_available() and vector_search.has_embeddings(conn)
     search_fn = db.semantic_search if use_semantic else db.search
 
     # Search each keyword, merge results

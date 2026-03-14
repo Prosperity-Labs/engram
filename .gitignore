@@ -10,6 +10,9 @@ build/
 
 # Internal docs (strategy, marketing, private case studies)
 docs/internal/
+docs/directions/
+docs/research/
+docs/2026-*.md
 
 # Local design assets
 design system.html
