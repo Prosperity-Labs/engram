@@ -73,6 +73,23 @@ function estimateTokens(text: string): number {
   return Math.floor(text.length / 4);
 }
 
+// Session detection: group calls by project with 10-min gap
+const SESSION_GAP_MS = 10 * 60 * 1000;
+const activeSessions = new Map<string, { id: string; lastSeen: number }>();
+
+function getSessionId(project: string | undefined): string | undefined {
+  if (!project) return undefined;
+  const now = Date.now();
+  const existing = activeSessions.get(project);
+  if (existing && now - existing.lastSeen < SESSION_GAP_MS) {
+    existing.lastSeen = now;
+    return existing.id;
+  }
+  const id = `proxy-${crypto.randomUUID()}`;
+  activeSessions.set(project, { id, lastSeen: now });
+  return id;
+}
+
 let callCount = 0;
 
 export interface ProxyLimits {
@@ -189,6 +206,9 @@ export function createHandler(opts: {
     }
     let systemTokens = estimateTokens(systemText);
 
+    // Session detection
+    const sessionId = getSessionId(project);
+
     // Enrichment
     let enrichmentVariant: string | undefined;
     if (opts.enrich && project && body.system) {
@@ -260,6 +280,7 @@ export function createHandler(opts: {
         cost_estimate_usd: Math.round(cost * 1e6) / 1e6,
         tools_used: toolsUsed,
         stop_reason: resBody.stop_reason,
+        session_id: sessionId,
         project,
         request_bytes: reqBytes.byteLength,
         response_bytes: resBytes.byteLength,
@@ -324,6 +345,7 @@ export function createHandler(opts: {
               cost_estimate_usd: 0,
               tools_used: [],
               stop_reason: "buffer_capped",
+              session_id: sessionId,
               project,
               request_bytes: reqBytes.byteLength,
               response_bytes: totalResponseBytes,
@@ -357,6 +379,7 @@ export function createHandler(opts: {
             cost_estimate_usd: Math.round(cost * 1e6) / 1e6,
             tools_used: sse.tool_names,
             stop_reason: sse.stop_reason,
+            session_id: sessionId,
             project,
             request_bytes: reqBytes.byteLength,
             response_bytes: totalResponseBytes,

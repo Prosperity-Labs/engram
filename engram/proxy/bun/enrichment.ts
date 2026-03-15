@@ -27,9 +27,11 @@ export async function getEnrichment(
 
   subprocessRunning = true;
   try {
+    // CWD must be engram project root so `python3 -m engram...` resolves
+    const engram_root = new URL("../../..", import.meta.url).pathname;
     const proc = Bun.spawn(
       ["python3", "-m", "engram.proxy.enrichment_cli", project],
-      { stdout: "pipe", stderr: "ignore" },
+      { stdout: "pipe", stderr: "ignore", cwd: engram_root },
     );
 
     // Race: subprocess output vs timeout

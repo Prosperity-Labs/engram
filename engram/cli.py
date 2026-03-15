@@ -655,6 +655,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={bun_bin} run {server_ts} --port {port}
+WorkingDirectory={server_ts.parent.parent.parent.parent}
 Restart=on-failure
 RestartSec=5
 Environment=HOME={Path.home()}
@@ -706,6 +707,21 @@ def cmd_proxy_uninstall(args: argparse.Namespace) -> None:
     unit_path.unlink()
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     print(f"{service_name} stopped, disabled, and removed.")
+
+
+def cmd_proxy_metrics(args: argparse.Namespace) -> None:
+    """Show session-level metrics and enrichment comparison."""
+    from engram.proxy.metrics import backfill, print_comparison, print_recent
+
+    if args.backfill:
+        results = backfill()
+        print(f"Computed metrics for {len(results)} sessions.")
+        print()
+
+    if args.recent:
+        print_recent(limit=args.limit)
+    else:
+        print_comparison()
 
 
 def cmd_proxy_stats(args: argparse.Namespace) -> None:
@@ -970,6 +986,11 @@ def main() -> None:
     p_proxy_install.set_defaults(func=cmd_proxy_install)
     p_proxy_uninstall = proxy_sub.add_parser("uninstall", help="Remove proxy systemd user service")
     p_proxy_uninstall.set_defaults(func=cmd_proxy_uninstall)
+    p_proxy_metrics = proxy_sub.add_parser("metrics", help="Show session-level metrics (enrichment comparison)")
+    p_proxy_metrics.add_argument("--backfill", action="store_true", help="Compute metrics from existing proxy_calls")
+    p_proxy_metrics.add_argument("--recent", action="store_true", help="Show recent sessions instead of comparison")
+    p_proxy_metrics.add_argument("--limit", "-n", type=int, default=20, help="Number of recent sessions (default: 20)")
+    p_proxy_metrics.set_defaults(func=cmd_proxy_metrics)
     p_proxy.set_defaults(func=lambda args: p_proxy.print_help())
 
     # hook-handle (hidden — called by the shell script)
