@@ -18,22 +18,20 @@ def _resolve_project(short_name: str, db: SessionDB) -> str | None:
 
     The proxy extracts just the last directory component, but the sessions DB
     stores full paths like '-home-user-Desktop-development-engram'.
-    Try exact match first, then suffix match.
+    Picks the matching project with the most sessions to avoid thin matches.
     """
-    with db._connect() as conn:
-        # Exact match
-        row = conn.execute(
-            "SELECT project FROM sessions WHERE project = ? LIMIT 1",
-            (short_name,),
-        ).fetchone()
-        if row:
-            return row["project"]
+    # Normalize dots to dashes (directory 'monra.app' → DB 'monra-app')
+    normalized = short_name.replace(".", "-")
 
-        # Suffix match: project ends with the short name
+    with db._connect() as conn:
+        # Find all projects matching exact name or ending with it,
+        # pick the one with the most sessions (richest data).
         row = conn.execute(
             "SELECT project, COUNT(*) as cnt FROM sessions "
-            "WHERE project LIKE ? GROUP BY project ORDER BY cnt DESC LIMIT 1",
-            (f"%{short_name}",),
+            "WHERE project = ? OR project LIKE ? "
+            "OR project = ? OR project LIKE ? "
+            "GROUP BY project ORDER BY cnt DESC LIMIT 1",
+            (short_name, f"%-{short_name}", normalized, f"%-{normalized}"),
         ).fetchone()
         if row:
             return row["project"]

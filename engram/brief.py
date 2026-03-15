@@ -469,8 +469,16 @@ def generate_slim_brief(
         lines.append("")
         lines.append("## Key Decisions")
         for item in arch[:3]:
-            snippet = item["snippet"][:120].replace("\n", " ")
-            lines.append(f"- {snippet}")
+            text = item["snippet"].replace("\n", " ").strip()
+            # Cut at sentence boundary, not mid-word
+            if len(text) > 150:
+                cut = text[:150].rfind(". ")
+                if cut > 60:
+                    text = text[:cut + 1]
+                else:
+                    cut = text[:150].rfind(" ")
+                    text = text[:cut] + "..." if cut > 60 else text[:150] + "..."
+            lines.append(f"- {text}")
 
     return "\n".join(lines)
 
