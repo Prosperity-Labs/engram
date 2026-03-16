@@ -25,6 +25,15 @@ def _get_db(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_session_metrics(conn: sqlite3.Connection) -> None:
+    """Add Loopwright columns if missing (idempotent)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(session_metrics)").fetchall()}
+    for col, ctype in [("agent_type", "TEXT"), ("correction_cycles", "INTEGER"), ("loop_outcome", "TEXT")]:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE session_metrics ADD COLUMN {col} {ctype}")
+    conn.commit()
+
+
 def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS session_metrics (
@@ -41,6 +50,9 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
             outcome TEXT,
             started_at DATETIME,
             ended_at DATETIME,
+            agent_type TEXT,
+            correction_cycles INTEGER,
+            loop_outcome TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_session_metrics_project
@@ -48,6 +60,7 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_session_metrics_variant
             ON session_metrics(enrichment_variant);
     """)
+    _migrate_session_metrics(conn)
 
 
 def detect_sessions(conn: sqlite3.Connection) -> list[dict]:
@@ -141,6 +154,17 @@ def compute_metrics(session: dict) -> dict:
     else:
         outcome = "unknown"
 
+    # Detect Loopwright correction cycles: sequences of edit→test-like patterns
+    # A correction cycle looks like: (Write/Edit calls) → (Bash call, likely test)
+    # repeated multiple times within one session.
+    correction_cycles = _detect_correction_cycles(calls)
+    agent_type = None
+    loop_outcome = None
+
+    # If correction cycles detected, this is likely a Loopwright session
+    if correction_cycles > 0:
+        loop_outcome = outcome  # inherit from session outcome
+
     return {
         "session_id": session["session_id"],
         "project": session["project"],
@@ -155,7 +179,36 @@ def compute_metrics(session: dict) -> dict:
         "outcome": outcome,
         "started_at": session["first_ts"].isoformat(),
         "ended_at": session["last_ts"].isoformat(),
+        "agent_type": agent_type,
+        "correction_cycles": correction_cycles,
+        "loop_outcome": loop_outcome,
     }
+
+
+def _detect_correction_cycles(calls: list[dict]) -> int:
+    """Detect Loopwright-style correction cycles in a session.
+
+    A correction cycle is: one or more edit calls followed by a Bash call
+    (likely running tests), then another round of edits. Each edit→test
+    transition after the first counts as a correction cycle.
+    """
+    TEST_TOOLS = {"Bash"}
+    transitions = 0
+    saw_edit = False
+
+    for call in calls:
+        tools = _parse_tools(call["tools_used"])
+        has_edit = bool(tools & EDIT_TOOLS)
+        has_test = bool(tools & TEST_TOOLS)
+
+        if has_edit:
+            saw_edit = True
+        elif has_test and saw_edit:
+            transitions += 1
+            saw_edit = False
+
+    # First edit→test is the initial run; subsequent ones are corrections
+    return max(0, transitions - 1)
 
 
 def _parse_tools(tools_json: str | None) -> set[str]:
@@ -183,8 +236,9 @@ def backfill(db_path: str | None = None) -> list[dict]:
                (session_id, project, enrichment_variant,
                 turns_to_first_edit, exploration_turns, exploration_cost_usd,
                 total_turns, total_cost_usd, files_read_before_edit,
-                errors_count, outcome, started_at, ended_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                errors_count, outcome, started_at, ended_at,
+                agent_type, correction_cycles, loop_outcome)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 metrics["session_id"],
                 metrics["project"],
@@ -199,6 +253,9 @@ def backfill(db_path: str | None = None) -> list[dict]:
                 metrics["outcome"],
                 metrics["started_at"],
                 metrics["ended_at"],
+                metrics["agent_type"],
+                metrics["correction_cycles"],
+                metrics["loop_outcome"],
             ),
         )
         results.append(metrics)

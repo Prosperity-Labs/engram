@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS session_metrics (
     outcome TEXT,                   -- 'completed' | 'abandoned' | 'unknown'
     started_at DATETIME,
     ended_at DATETIME,
+    agent_type TEXT,                -- 'claude' | 'cursor' | 'codex' (from Loopwright)
+    correction_cycles INTEGER,     -- number of Loopwright correction cycles
+    loop_outcome TEXT,             -- 'passed' | 'failed' | 'escalated' (from Loopwright)
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
