@@ -10,7 +10,8 @@ build/
 
 # Internal docs (strategy, marketing, private case studies)
 docs/internal/
-docs/directions/
+docs/directions/*
+!docs/directions/loopwright-paperclip-strategy.md
 docs/research/
 docs/2026-*.md
 
