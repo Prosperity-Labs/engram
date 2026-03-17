@@ -34,6 +34,9 @@ const handler = createHandler({ db, enrich, verbose, limits });
 const server = Bun.serve({
   port,
   hostname: "127.0.0.1",
+  // Claude requests can legitimately stay quiet for longer than Bun's
+  // default 10s idle timeout while the upstream model is still working.
+  idleTimeout: 255,
   fetch: handler,
 });
 
