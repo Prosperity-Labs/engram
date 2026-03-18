@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS proxy_calls (
     project TEXT,          -- detect from system prompt or cwd
     request_bytes INTEGER,
     response_bytes INTEGER,
-    enrichment_variant TEXT       -- NULL=baseline, 'v1_slim'=enriched
+    enrichment_variant TEXT,      -- NULL=baseline, 'v1_slim'=enriched
+    agent_type TEXT               -- NULL=interactive, 'claude'/'cursor'/'codex' from Loopwright
 );
 
 CREATE INDEX IF NOT EXISTS idx_proxy_calls_timestamp ON proxy_calls(timestamp);

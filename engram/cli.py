@@ -629,9 +629,12 @@ def cmd_proxy_start(args: argparse.Namespace) -> None:
     )
 
 
-def cmd_proxy_install(args: argparse.Namespace) -> None:
-    """Install engram proxy as a systemd user service."""
+def _install_proxy_service(
+    service_name: str, port: int, no_enrich: bool, start_now: bool,
+) -> None:
+    """Install a single proxy systemd user service."""
     import shutil
+    import subprocess
     from pathlib import Path
 
     bun_bin = shutil.which("bun")
@@ -644,17 +647,17 @@ def cmd_proxy_install(args: argparse.Namespace) -> None:
         print(f"ERROR: server.ts not found at {server_ts}", file=sys.stderr)
         sys.exit(1)
 
-    port = args.port
-    service_name = "engram-proxy"
+    enrich_flag = " --no-enrich" if no_enrich else ""
+    desc_suffix = " (baseline, no enrichment)" if no_enrich else ""
 
     unit = f"""\
 [Unit]
-Description=Engram Proxy — AI agent API call interceptor
+Description=Engram Proxy{desc_suffix} — AI agent API call interceptor
 After=network.target
 
 [Service]
 Type=simple
-ExecStart={bun_bin} run {server_ts} --port {port}
+ExecStart={bun_bin} run {server_ts} --port {port}{enrich_flag}
 WorkingDirectory={server_ts.parent.parent.parent.parent}
 Restart=on-failure
 RestartSec=5
@@ -672,41 +675,66 @@ WantedBy=default.target
 
     print(f"Wrote {unit_path}")
 
-    # Reload and enable
-    import subprocess
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
 
-    if args.now:
+    if start_now:
         subprocess.run(["systemctl", "--user", "start", service_name], check=True)
-        print(f"\n{service_name} started on port {port}.")
+        print(f"{service_name} started on port {port}.")
     else:
-        print(f"\n{service_name} enabled. Start with:")
+        print(f"{service_name} enabled. Start with:")
         print(f"  systemctl --user start {service_name}")
+
+
+def cmd_proxy_install(args: argparse.Namespace) -> None:
+    """Install engram proxy as a systemd user service."""
+    port = args.port
+
+    # Install main enriched proxy
+    _install_proxy_service("engram-proxy", port, no_enrich=False, start_now=args.now)
 
     print(f"\nUsage:")
     print(f"  export ANTHROPIC_BASE_URL=http://localhost:{port}")
-    print(f"  systemctl --user status {service_name}")
-    print(f"  journalctl --user -u {service_name} -f")
+    print(f"  systemctl --user status engram-proxy")
+    print(f"  journalctl --user -u engram-proxy -f")
+
+    # Optionally install baseline proxy for A/B experiments
+    if args.baseline:
+        baseline_port = args.baseline_port
+        print(f"\n--- Installing baseline proxy on :{baseline_port} ---\n")
+        _install_proxy_service(
+            "engram-proxy-baseline", baseline_port,
+            no_enrich=True, start_now=args.now,
+        )
+        print(f"\nExperiment setup:")
+        print(f"  Enriched:  http://localhost:{port}")
+        print(f"  Baseline:  http://localhost:{baseline_port}")
+        print(f"  journalctl --user -u engram-proxy-baseline -f")
 
 
 def cmd_proxy_uninstall(args: argparse.Namespace) -> None:
-    """Remove engram proxy systemd user service."""
+    """Remove engram proxy systemd user service(s)."""
     import subprocess
     from pathlib import Path
 
-    service_name = "engram-proxy"
-    unit_path = Path.home() / ".config" / "systemd" / "user" / f"{service_name}.service"
+    services = ["engram-proxy", "engram-proxy-baseline"]
+    systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    removed = 0
 
-    if not unit_path.exists():
-        print(f"{service_name} is not installed.")
-        return
+    for service_name in services:
+        unit_path = systemd_dir / f"{service_name}.service"
+        if not unit_path.exists():
+            continue
+        subprocess.run(["systemctl", "--user", "stop", service_name], check=False)
+        subprocess.run(["systemctl", "--user", "disable", service_name], check=False)
+        unit_path.unlink()
+        print(f"{service_name} stopped, disabled, and removed.")
+        removed += 1
 
-    subprocess.run(["systemctl", "--user", "stop", service_name], check=False)
-    subprocess.run(["systemctl", "--user", "disable", service_name], check=False)
-    unit_path.unlink()
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    print(f"{service_name} stopped, disabled, and removed.")
+    if removed:
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    else:
+        print("No engram proxy services are installed.")
 
 
 def cmd_proxy_metrics(args: argparse.Namespace) -> None:
@@ -983,6 +1011,10 @@ def main() -> None:
     p_proxy_install = proxy_sub.add_parser("install", help="Install proxy as a systemd user service")
     p_proxy_install.add_argument("--port", type=int, default=9080, help="Listen port (default: 9080)")
     p_proxy_install.add_argument("--now", action="store_true", help="Start the service immediately after installing")
+    p_proxy_install.add_argument("--baseline", action="store_true",
+                                 help="Also install a baseline proxy (no enrichment) for A/B experiments")
+    p_proxy_install.add_argument("--baseline-port", type=int, default=9081,
+                                 help="Baseline proxy port (default: 9081)")
     p_proxy_install.set_defaults(func=cmd_proxy_install)
     p_proxy_uninstall = proxy_sub.add_parser("uninstall", help="Remove proxy systemd user service")
     p_proxy_uninstall.set_defaults(func=cmd_proxy_uninstall)

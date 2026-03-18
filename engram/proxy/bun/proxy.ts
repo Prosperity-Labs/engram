@@ -209,6 +209,9 @@ export function createHandler(opts: {
     // Session detection
     const sessionId = getSessionId(project);
 
+    // Agent type from Loopwright header
+    const agentType = req.headers.get("x-loopwright-agent-type") ?? undefined;
+
     // Enrichment
     let enrichmentVariant: string | undefined;
     if (opts.enrich && project && body.system) {
@@ -285,6 +288,7 @@ export function createHandler(opts: {
         request_bytes: reqBytes.byteLength,
         response_bytes: resBytes.byteLength,
         enrichment_variant: enrichmentVariant,
+        agent_type: agentType,
       };
 
       opts.db.save(record);
@@ -350,6 +354,7 @@ export function createHandler(opts: {
               request_bytes: reqBytes.byteLength,
               response_bytes: totalResponseBytes,
               enrichment_variant: enrichmentVariant,
+              agent_type: agentType,
             };
             opts.db.save(record);
             printSummary(record);
@@ -384,6 +389,7 @@ export function createHandler(opts: {
             request_bytes: reqBytes.byteLength,
             response_bytes: totalResponseBytes,
             enrichment_variant: enrichmentVariant,
+            agent_type: agentType,
           };
 
           opts.db.save(record);
@@ -420,6 +426,7 @@ function printSummary(r: CallRecord): void {
   if (r.tools_used.length > 3) toolsStr += `+${r.tools_used.length - 3}`;
   const proj = r.project ?? "?";
   const enrichTag = r.enrichment_variant ? "+E" : "";
+  const agentTag = r.agent_type ? `[${r.agent_type}]` : "";
 
   const pad = (n: number, w: number) => n.toLocaleString().padStart(w);
 
@@ -430,6 +437,6 @@ function printSummary(r: CallRecord): void {
       `$${r.cost_estimate_usd.toFixed(4)} ` +
       `tools=[${toolsStr}] ` +
       `stop=${r.stop_reason ?? "?"} ` +
-      `proj=${proj}${enrichTag}`
+      `proj=${proj}${enrichTag}${agentTag}`
   );
 }

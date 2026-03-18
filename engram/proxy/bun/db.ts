@@ -23,6 +23,7 @@ export interface CallRecord {
   request_bytes: number;
   response_bytes: number;
   enrichment_variant?: string;
+  agent_type?: string;
 }
 
 export class ProxyDB {
@@ -37,13 +38,13 @@ export class ProxyDB {
     const schemaPath = join(dirname(import.meta.dir), "schema.sql");
     this.db.exec(readFileSync(schemaPath, "utf-8"));
 
-    // Migration: add enrichment_variant if missing
-    try {
-      this.db.exec(
-        "ALTER TABLE proxy_calls ADD COLUMN enrichment_variant TEXT"
-      );
-    } catch {
-      // column already exists
+    // Migration: add columns if missing
+    for (const col of ["enrichment_variant TEXT", "agent_type TEXT"]) {
+      try {
+        this.db.exec(`ALTER TABLE proxy_calls ADD COLUMN ${col}`);
+      } catch {
+        // column already exists
+      }
     }
 
     this.insert = this.db.prepare(`
@@ -51,8 +52,8 @@ export class ProxyDB {
         (id, timestamp, model, system_prompt_tokens, message_count,
          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
          cost_estimate_usd, tools_used, stop_reason, session_id, project,
-         request_bytes, response_bytes, enrichment_variant)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         request_bytes, response_bytes, enrichment_variant, agent_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   }
 
@@ -74,7 +75,8 @@ export class ProxyDB {
       r.project ?? null,
       r.request_bytes,
       r.response_bytes,
-      r.enrichment_variant ?? null
+      r.enrichment_variant ?? null,
+      r.agent_type ?? null
     );
   }
 

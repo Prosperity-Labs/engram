@@ -70,7 +70,7 @@ def detect_sessions(conn: sqlite3.Connection) -> list[dict]:
     """
     rows = conn.execute("""
         SELECT id, timestamp, model, cost_estimate_usd, tools_used,
-               stop_reason, session_id, project, enrichment_variant
+               stop_reason, session_id, project, enrichment_variant, agent_type
         FROM proxy_calls
         WHERE project IS NOT NULL
         ORDER BY project, timestamp
@@ -158,8 +158,11 @@ def compute_metrics(session: dict) -> dict:
     # A correction cycle looks like: (Write/Edit calls) → (Bash call, likely test)
     # repeated multiple times within one session.
     correction_cycles = _detect_correction_cycles(calls)
-    agent_type = None
     loop_outcome = None
+
+    # Agent type from X-Loopwright-Agent-Type header (majority vote)
+    agent_types = [c.get("agent_type") for c in calls if c.get("agent_type")]
+    agent_type = agent_types[0] if agent_types else None
 
     # If correction cycles detected, this is likely a Loopwright session
     if correction_cycles > 0:
