@@ -24,6 +24,8 @@ export interface CallRecord {
   response_bytes: number;
   enrichment_variant?: string;
   agent_type?: string;
+  turn_number?: number;
+  cumulative_input_tokens?: number;
 }
 
 export class ProxyDB {
@@ -39,7 +41,12 @@ export class ProxyDB {
     this.db.exec(readFileSync(schemaPath, "utf-8"));
 
     // Migration: add columns if missing
-    for (const col of ["enrichment_variant TEXT", "agent_type TEXT"]) {
+    for (const col of [
+      "enrichment_variant TEXT",
+      "agent_type TEXT",
+      "turn_number INTEGER",
+      "cumulative_input_tokens INTEGER",
+    ]) {
       try {
         this.db.exec(`ALTER TABLE proxy_calls ADD COLUMN ${col}`);
       } catch {
@@ -52,8 +59,9 @@ export class ProxyDB {
         (id, timestamp, model, system_prompt_tokens, message_count,
          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
          cost_estimate_usd, tools_used, stop_reason, session_id, project,
-         request_bytes, response_bytes, enrichment_variant, agent_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         request_bytes, response_bytes, enrichment_variant, agent_type,
+         turn_number, cumulative_input_tokens)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   }
 
@@ -76,7 +84,9 @@ export class ProxyDB {
       r.request_bytes,
       r.response_bytes,
       r.enrichment_variant ?? null,
-      r.agent_type ?? null
+      r.agent_type ?? null,
+      r.turn_number ?? null,
+      r.cumulative_input_tokens ?? null
     );
   }
 

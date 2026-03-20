@@ -26,9 +26,14 @@ def _get_db(db_path: str | None = None) -> sqlite3.Connection:
 
 
 def _migrate_session_metrics(conn: sqlite3.Connection) -> None:
-    """Add Loopwright columns if missing (idempotent)."""
+    """Add Loopwright and turn-tracking columns if missing (idempotent)."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(session_metrics)").fetchall()}
-    for col, ctype in [("agent_type", "TEXT"), ("correction_cycles", "INTEGER"), ("loop_outcome", "TEXT")]:
+    for col, ctype in [
+        ("agent_type", "TEXT"),
+        ("correction_cycles", "INTEGER"),
+        ("loop_outcome", "TEXT"),
+        ("session_length_category", "TEXT"),
+    ]:
         if col not in cols:
             conn.execute(f"ALTER TABLE session_metrics ADD COLUMN {col} {ctype}")
     conn.commit()
@@ -69,7 +74,8 @@ def detect_sessions(conn: sqlite3.Connection) -> list[dict]:
     Returns list of sessions, each with a list of call dicts.
     """
     rows = conn.execute("""
-        SELECT id, timestamp, model, cost_estimate_usd, tools_used,
+        SELECT id, timestamp, model, input_tokens, output_tokens,
+               cache_read_tokens, cost_estimate_usd, tools_used,
                stop_reason, session_id, project, enrichment_variant, agent_type
         FROM proxy_calls
         WHERE project IS NOT NULL
@@ -108,6 +114,15 @@ def detect_sessions(conn: sqlite3.Connection) -> list[dict]:
         sessions.append(current)
 
     return sessions
+
+
+def _categorize_session_length(turn_count: int) -> str:
+    """Categorize session by turn count."""
+    if turn_count < 10:
+        return "short"
+    if turn_count <= 30:
+        return "medium"
+    return "long"
 
 
 def compute_metrics(session: dict) -> dict:
@@ -185,6 +200,7 @@ def compute_metrics(session: dict) -> dict:
         "agent_type": agent_type,
         "correction_cycles": correction_cycles,
         "loop_outcome": loop_outcome,
+        "session_length_category": _categorize_session_length(total_turns),
     }
 
 
@@ -224,10 +240,61 @@ def _parse_tools(tools_json: str | None) -> set[str]:
         return set()
 
 
+def _ensure_turn_metrics_table(conn: sqlite3.Connection) -> None:
+    """Create session_turn_metrics table if it doesn't exist."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS session_turn_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            turn_number INTEGER NOT NULL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cumulative_cost_usd REAL,
+            cache_hit_ratio REAL,
+            tools_used TEXT,
+            UNIQUE(session_id, turn_number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_turn_metrics_session
+            ON session_turn_metrics(session_id);
+    """)
+
+
+def _compute_turn_metrics(conn: sqlite3.Connection, session: dict) -> None:
+    """Compute and store per-turn metrics for a session."""
+    calls = session["calls"]
+    cumulative_cost = 0.0
+
+    for i, call in enumerate(calls, 1):
+        cost = call.get("cost_estimate_usd") or 0.0
+        cumulative_cost += cost
+
+        input_toks = call.get("input_tokens") or 0
+        output_toks = call.get("output_tokens") or 0
+        cache_read = call.get("cache_read_tokens") or 0
+
+        # cache_hit_ratio: portion of input that came from cache
+        total_input = cache_read + input_toks
+        cache_hit_ratio = round(cache_read / total_input, 4) if total_input > 0 else 0.0
+
+        tools = call.get("tools_used") or "[]"
+
+        conn.execute(
+            """INSERT OR REPLACE INTO session_turn_metrics
+               (session_id, turn_number, input_tokens, output_tokens,
+                cumulative_cost_usd, cache_hit_ratio, tools_used)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session["session_id"], i, input_toks, output_toks,
+                round(cumulative_cost, 6), cache_hit_ratio, tools,
+            ),
+        )
+
+
 def backfill(db_path: str | None = None) -> list[dict]:
     """Detect sessions and compute metrics for all proxy_calls."""
     conn = _get_db(db_path)
     _ensure_table(conn)
+    _ensure_turn_metrics_table(conn)
 
     sessions = detect_sessions(conn)
     results = []
@@ -240,8 +307,9 @@ def backfill(db_path: str | None = None) -> list[dict]:
                 turns_to_first_edit, exploration_turns, exploration_cost_usd,
                 total_turns, total_cost_usd, files_read_before_edit,
                 errors_count, outcome, started_at, ended_at,
-                agent_type, correction_cycles, loop_outcome)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                agent_type, correction_cycles, loop_outcome,
+                session_length_category)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 metrics["session_id"],
                 metrics["project"],
@@ -259,8 +327,10 @@ def backfill(db_path: str | None = None) -> list[dict]:
                 metrics["agent_type"],
                 metrics["correction_cycles"],
                 metrics["loop_outcome"],
+                metrics["session_length_category"],
             ),
         )
+        _compute_turn_metrics(conn, session)
         results.append(metrics)
 
     conn.commit()
@@ -308,6 +378,30 @@ def print_comparison(db_path: str | None = None) -> None:
             f"{r['avg_total_turns']:>10} ${r['avg_total_cost']:>7.4f} "
             f"{r['avg_reads']:>6} {r['avg_errors']:>6}"
         )
+
+    # Session length breakdown
+    length_rows = conn.execute("""
+        SELECT
+            COALESCE(enrichment_variant, 'baseline') as variant,
+            COALESCE(session_length_category, 'unknown') as length_cat,
+            COUNT(*) as sessions,
+            ROUND(AVG(total_turns), 1) as avg_turns,
+            ROUND(AVG(total_cost_usd), 4) as avg_cost
+        FROM session_metrics
+        WHERE total_turns >= 3
+        GROUP BY enrichment_variant, session_length_category
+        ORDER BY variant, length_cat
+    """).fetchall()
+
+    if length_rows:
+        print(f"\nBy Session Length:")
+        print(f"{'Variant':<12} {'Length':<10} {'Sessions':>8} {'AvgTurns':>8} {'AvgCost':>8}")
+        print("-" * 50)
+        for r in length_rows:
+            print(
+                f"{r['variant']:<12} {r['length_cat']:<10} {r['sessions']:>8} "
+                f"{r['avg_turns']:>8} ${r['avg_cost']:>7.4f}"
+            )
 
     conn.close()
 

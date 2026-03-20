@@ -27,5 +27,8 @@ design system.html
 docs/data-analysis-2026-03-05.md
 tests/test_session_count.py
 
+# Experiment worktrees
+.engram-experiments/
+
 # A/B test worktree configs (don't commit test-specific settings)
 .claude/settings.json

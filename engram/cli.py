@@ -837,6 +837,201 @@ def cmd_proxy_calls(args: argparse.Namespace) -> None:
         )
 
 
+def _compute_outcome(enriched_status: str | None, baseline_status: str | None,
+                      enriched_dur: int | None, baseline_dur: int | None) -> str:
+    """Determine experiment outcome from status and duration."""
+    e_pass = enriched_status == "passed"
+    b_pass = baseline_status == "passed"
+
+    if e_pass and not b_pass:
+        return "enriched_wins"
+    if b_pass and not e_pass:
+        return "baseline_wins"
+    if not e_pass and not b_pass:
+        return "inconclusive"
+
+    # Both passed — compare durations
+    if enriched_dur is not None and baseline_dur is not None and baseline_dur > 0:
+        delta_pct = (baseline_dur - enriched_dur) / baseline_dur * 100
+        if delta_pct > 10:
+            return "enriched_wins"
+        if delta_pct < -10:
+            return "baseline_wins"
+        return "tie"
+
+    return "tie"
+
+
+def cmd_proxy_experiments_store(args: argparse.Namespace) -> None:
+    """Store an experiment result from JSON (file or stdin)."""
+    import sqlite3
+    from pathlib import Path
+
+    if args.json_file and args.json_file != "-":
+        raw = Path(args.json_file).read_text()
+    else:
+        raw = sys.stdin.read()
+
+    data = json.loads(raw)
+
+    # Normalize: support both flat and nested formats
+    experiment_id = data.get("experimentId") or data.get("experiment_id") or f"experiment-{int(__import__('time').time() * 1000)}"
+    task_prompt = data.get("taskPrompt") or data.get("task_prompt") or data.get("task", "")
+    task_complexity = data.get("taskComplexity") or data.get("task_complexity")
+    repo = data.get("repo") or data.get("repository")
+    agent_type = data.get("agentType") or data.get("agent_type") or "claude"
+    model = data.get("model")
+
+    # Extract from nested enriched/baseline or flat fields
+    enriched = data.get("enriched", {})
+    baseline = data.get("baseline", {})
+
+    enriched_status = enriched.get("status") or data.get("enriched_status")
+    baseline_status = baseline.get("status") or data.get("baseline_status")
+    enriched_cycles = enriched.get("cycles") or enriched.get("correctionCycles") or data.get("enriched_cycles")
+    baseline_cycles = baseline.get("cycles") or baseline.get("correctionCycles") or data.get("baseline_cycles")
+    enriched_duration_ms = enriched.get("durationMs") or enriched.get("duration_ms") or data.get("enriched_duration_ms")
+    baseline_duration_ms = baseline.get("durationMs") or baseline.get("duration_ms") or data.get("baseline_duration_ms")
+    enriched_cost = enriched.get("costUsd") or enriched.get("cost_usd") or data.get("enriched_cost_usd")
+    baseline_cost = baseline.get("costUsd") or baseline.get("cost_usd") or data.get("baseline_cost_usd")
+    enriched_session_id = enriched.get("sessionId") or enriched.get("session_id") or data.get("enriched_session_id")
+    baseline_session_id = baseline.get("sessionId") or baseline.get("session_id") or data.get("baseline_session_id")
+
+    # Compute duration delta
+    duration_delta_pct = None
+    if enriched_duration_ms and baseline_duration_ms and baseline_duration_ms > 0:
+        duration_delta_pct = round((baseline_duration_ms - enriched_duration_ms) / baseline_duration_ms * 100, 1)
+
+    # Compute outcome
+    outcome = data.get("outcome") or _compute_outcome(
+        enriched_status, baseline_status, enriched_duration_ms, baseline_duration_ms
+    )
+
+    notes = data.get("notes")
+    tags = json.dumps(data.get("tags", [])) if data.get("tags") else None
+
+    db_path = Path.home() / ".config" / "engram" / "sessions.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # Ensure table exists
+        schema_path = Path(__file__).parent / "proxy" / "schema.sql"
+        conn.executescript(schema_path.read_text())
+
+        conn.execute("""
+            INSERT OR REPLACE INTO experiments
+                (experiment_id, task_prompt, task_complexity, repo, agent_type, model,
+                 enriched_status, baseline_status, enriched_cycles, baseline_cycles,
+                 enriched_duration_ms, baseline_duration_ms, duration_delta_pct,
+                 enriched_cost_usd, baseline_cost_usd,
+                 enriched_session_id, baseline_session_id,
+                 outcome, notes, tags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_id, task_prompt, task_complexity, repo, agent_type, model,
+            enriched_status, baseline_status, enriched_cycles, baseline_cycles,
+            enriched_duration_ms, baseline_duration_ms, duration_delta_pct,
+            enriched_cost, baseline_cost,
+            enriched_session_id, baseline_session_id,
+            outcome, notes, tags,
+        ))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Outcome display
+    outcome_colors = {
+        "enriched_wins": "\033[32m",  # green
+        "baseline_wins": "\033[33m",  # yellow
+        "tie": "\033[36m",            # cyan
+        "inconclusive": "\033[90m",   # gray
+    }
+    color = outcome_colors.get(outcome, "")
+    reset = "\033[0m"
+
+    print(f"Stored experiment {experiment_id}")
+    print(f"  Task:       {task_prompt[:80]}")
+    print(f"  Complexity: {task_complexity or '?'}")
+    print(f"  Outcome:    {color}{outcome}{reset}")
+    if duration_delta_pct is not None:
+        print(f"  Delta:      {duration_delta_pct:+.1f}% (enriched {'faster' if duration_delta_pct > 0 else 'slower'})")
+
+
+def cmd_proxy_experiments_list(args: argparse.Namespace) -> None:
+    """List stored experiment results."""
+    import sqlite3
+    from pathlib import Path
+
+    db_path = Path.home() / ".config" / "engram" / "sessions.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    try:
+        # Ensure table exists
+        schema_path = Path(__file__).parent / "proxy" / "schema.sql"
+        conn.executescript(schema_path.read_text())
+
+        clauses = []
+        params: list = []
+        if args.complexity:
+            clauses.append("task_complexity = ?")
+            params.append(args.complexity)
+        if args.outcome:
+            clauses.append("outcome = ?")
+            params.append(args.outcome)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(f"""
+            SELECT * FROM experiments
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, params + [args.limit]).fetchall()
+    except sqlite3.OperationalError:
+        print("No experiments table yet. Run an experiment first.")
+        return
+    finally:
+        conn.close()
+
+    if not rows:
+        print("No experiments found.")
+        return
+
+    outcome_colors = {
+        "enriched_wins": "\033[32m",
+        "baseline_wins": "\033[33m",
+        "tie": "\033[36m",
+        "inconclusive": "\033[90m",
+    }
+    reset = "\033[0m"
+
+    print(f"{'ID':<28} {'Complexity':<10} {'Enriched':<12} {'Baseline':<12} {'Delta':>8} {'Outcome':<16} {'Date':<12}")
+    print("-" * 100)
+
+    for r in rows:
+        eid = (r["experiment_id"] or "?")[:26]
+        cx = r["task_complexity"] or "?"
+        e_dur = f"{r['enriched_duration_ms'] / 1000:.0f}s" if r["enriched_duration_ms"] else "?"
+        b_dur = f"{r['baseline_duration_ms'] / 1000:.0f}s" if r["baseline_duration_ms"] else "?"
+        e_status = r["enriched_status"] or "?"
+        b_status = r["baseline_status"] or "?"
+        delta = f"{r['duration_delta_pct']:+.0f}%" if r["duration_delta_pct"] is not None else "?"
+        outcome = r["outcome"] or "?"
+        color = outcome_colors.get(outcome, "")
+        date = (r["created_at"] or "")[:10]
+
+        e_col = f"{e_status}/{e_dur}"
+        b_col = f"{b_status}/{b_dur}"
+
+        print(f"  {eid:<26} {cx:<10} {e_col:<12} {b_col:<12} {delta:>8} {color}{outcome:<16}{reset} {date}")
+
+    # Summary
+    wins = sum(1 for r in rows if r["outcome"] == "enriched_wins")
+    losses = sum(1 for r in rows if r["outcome"] == "baseline_wins")
+    ties = sum(1 for r in rows if r["outcome"] == "tie")
+    total = len(rows)
+    print(f"\n  {total} experiments: {wins} enriched wins, {losses} baseline wins, {ties} ties")
+
+
 def cmd_proxy_report(args: argparse.Namespace) -> None:
     """Show enrichment comparison report."""
     from engram.proxy.report import generate_report
@@ -884,6 +1079,70 @@ def cmd_reindex(args: argparse.Namespace) -> None:
 
     print(f"\nDone: {reindexed} re-indexed, {errors} errors")
     print("Run `engram costs` to see accurate cost breakdown.")
+
+
+def cmd_experiment_run(args: argparse.Namespace) -> None:
+    """Run a paired A/B experiment."""
+    from .experiment.runner import run_experiment
+    run_experiment(
+        task_prompt=args.task,
+        test_cmd=args.test,
+        model=args.model,
+        complexity=args.complexity,
+        budget_usd=args.budget,
+        cache_gap_s=args.cache_gap,
+        keep_worktrees=args.keep_worktrees,
+        sequential=args.sequential,
+        randomize_order=args.randomize_order,
+    )
+
+
+def cmd_experiment_tasks(args: argparse.Namespace) -> None:
+    """List predefined experiment tasks."""
+    from .experiment.runner import TASKS
+    print(f"{'ID':<24} {'Complexity':<10} Prompt")
+    print("-" * 80)
+    for t in TASKS:
+        print(f"  {t['id']:<22} {t['complexity']:<10} {t['prompt'][:60]}...")
+
+
+def cmd_experiment_batch(args: argparse.Namespace) -> None:
+    """Run multiple predefined experiments."""
+    from .experiment.runner import TASKS, run_experiment
+    task_ids = args.ids or [t["id"] for t in TASKS]
+    tasks = [t for t in TASKS if t["id"] in task_ids]
+    if not tasks:
+        print(f"No matching tasks. Available: {', '.join(t['id'] for t in TASKS)}")
+        return
+    print(f"Running {len(tasks)} experiments...\n")
+    results = []
+    for t in tasks:
+        try:
+            result = run_experiment(
+                task_prompt=t["prompt"],
+                test_cmd=t.get("test"),
+                model=args.model,
+                complexity=t["complexity"],
+                budget_usd=args.budget,
+            )
+            results.append((t["id"], result))
+        except Exception as e:
+            print(f"\nExperiment {t['id']} failed: {e}")
+            results.append((t["id"], {"outcome": "error", "error": str(e)}))
+
+    # Batch summary
+    print(f"\n{'='*60}")
+    print(f"  BATCH SUMMARY ({len(results)} experiments)")
+    print(f"{'='*60}")
+    for tid, r in results:
+        outcome = r.get("outcome", "error")
+        delta = r.get("delta_pct")
+        delta_str = f"{delta:+.0f}%" if delta is not None else "?"
+        print(f"  {tid:<22} {outcome:<18} {delta_str}")
+    wins = sum(1 for _, r in results if r.get("outcome") == "enriched_wins")
+    losses = sum(1 for _, r in results if r.get("outcome") == "baseline_wins")
+    ties = sum(1 for _, r in results if r.get("outcome") == "tie")
+    print(f"\n  {wins} enriched wins, {losses} baseline wins, {ties} ties")
 
 
 def main() -> None:
@@ -1023,7 +1282,50 @@ def main() -> None:
     p_proxy_metrics.add_argument("--recent", action="store_true", help="Show recent sessions instead of comparison")
     p_proxy_metrics.add_argument("--limit", "-n", type=int, default=20, help="Number of recent sessions (default: 20)")
     p_proxy_metrics.set_defaults(func=cmd_proxy_metrics)
+
+    # proxy experiments (sub-subcommand)
+    p_proxy_experiments = proxy_sub.add_parser("experiments", help="Store and view A/B experiment results")
+    experiments_sub = p_proxy_experiments.add_subparsers(dest="experiments_command")
+    p_exp_store = experiments_sub.add_parser("store", help="Store experiment result from JSON (file or stdin)")
+    p_exp_store.add_argument("json_file", nargs="?", default="-", help="JSON file path (default: stdin)")
+    p_exp_store.set_defaults(func=cmd_proxy_experiments_store)
+    p_exp_list = experiments_sub.add_parser("list", help="List stored experiment results")
+    p_exp_list.add_argument("--complexity", "-c", choices=["simple", "medium", "complex"],
+                            help="Filter by task complexity")
+    p_exp_list.add_argument("--outcome", "-o", choices=["enriched_wins", "baseline_wins", "tie", "inconclusive"],
+                            help="Filter by outcome")
+    p_exp_list.add_argument("--limit", "-n", type=int, default=20, help="Number of results (default: 20)")
+    p_exp_list.set_defaults(func=cmd_proxy_experiments_list)
+    p_proxy_experiments.set_defaults(func=lambda args: p_proxy_experiments.print_help())
+
     p_proxy.set_defaults(func=lambda args: p_proxy.print_help())
+
+    # experiment
+    p_exp = subparsers.add_parser("experiment", help="Run A/B enrichment experiments")
+    exp_sub = p_exp.add_subparsers(dest="experiment_command")
+
+    p_exp_run = exp_sub.add_parser("run", help="Run a paired A/B experiment")
+    p_exp_run.add_argument("task", help="Task prompt for the agent")
+    p_exp_run.add_argument("--test", help="Test command to verify correctness (run in worktree)")
+    p_exp_run.add_argument("--model", default="sonnet", help="Model to use (default: sonnet)")
+    p_exp_run.add_argument("--complexity", "-c", choices=["simple", "medium", "complex"], default="simple")
+    p_exp_run.add_argument("--budget", type=float, default=2.0, help="Max budget per arm in USD (default: 2.0)")
+    p_exp_run.add_argument("--cache-gap", type=int, default=0, help="Seconds to wait between arms (default: 0)")
+    p_exp_run.add_argument("--keep-worktrees", action="store_true", help="Don't clean up worktrees after")
+    p_exp_run.add_argument("--sequential", action="store_true", help="Run arms sequentially instead of in parallel (default: parallel)")
+    p_exp_run.add_argument("--randomize-order", action="store_true", help="Randomize arm order in sequential mode")
+    p_exp_run.set_defaults(func=cmd_experiment_run)
+
+    p_exp_tasks = exp_sub.add_parser("tasks", help="List predefined experiment tasks")
+    p_exp_tasks.set_defaults(func=cmd_experiment_tasks)
+
+    p_exp_batch = exp_sub.add_parser("batch", help="Run multiple predefined experiments")
+    p_exp_batch.add_argument("--ids", nargs="*", help="Task IDs to run (default: all)")
+    p_exp_batch.add_argument("--model", default="sonnet", help="Model to use (default: sonnet)")
+    p_exp_batch.add_argument("--budget", type=float, default=2.0, help="Max budget per arm in USD (default: 2.0)")
+    p_exp_batch.set_defaults(func=cmd_experiment_batch)
+
+    p_exp.set_defaults(func=lambda args: p_exp.print_help())
 
     # hook-handle (hidden — called by the shell script)
     p_hook_handle = subparsers.add_parser("hook-handle", help=argparse.SUPPRESS)

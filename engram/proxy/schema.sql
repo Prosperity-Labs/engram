@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS proxy_calls (
     request_bytes INTEGER,
     response_bytes INTEGER,
     enrichment_variant TEXT,      -- NULL=baseline, 'v1_slim'=enriched
-    agent_type TEXT               -- NULL=interactive, 'claude'/'cursor'/'codex' from Loopwright
+    agent_type TEXT,              -- NULL=interactive, 'claude'/'cursor'/'codex' from Loopwright
+    turn_number INTEGER,          -- sequential turn within session (1-indexed)
+    cumulative_input_tokens INTEGER  -- running total of input tokens in session up to this call
 );
 
 CREATE INDEX IF NOT EXISTS idx_proxy_calls_timestamp ON proxy_calls(timestamp);
@@ -40,8 +42,54 @@ CREATE TABLE IF NOT EXISTS session_metrics (
     agent_type TEXT,                -- 'claude' | 'cursor' | 'codex' (from Loopwright)
     correction_cycles INTEGER,     -- number of Loopwright correction cycles
     loop_outcome TEXT,             -- 'passed' | 'failed' | 'escalated' (from Loopwright)
+    session_length_category TEXT,  -- 'short' (<10 turns) | 'medium' (10-30) | 'long' (30+)
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_metrics_project ON session_metrics(project);
 CREATE INDEX IF NOT EXISTS idx_session_metrics_variant ON session_metrics(enrichment_variant);
+
+CREATE TABLE IF NOT EXISTS experiments (
+    experiment_id TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    task_prompt TEXT NOT NULL,
+    task_complexity TEXT CHECK(task_complexity IN ('simple', 'medium', 'complex')),
+    repo TEXT,
+    agent_type TEXT,
+    model TEXT,
+    enriched_status TEXT,         -- 'passed' | 'failed' | 'error'
+    baseline_status TEXT,         -- 'passed' | 'failed' | 'error'
+    enriched_cycles INTEGER,
+    baseline_cycles INTEGER,
+    enriched_duration_ms INTEGER,
+    baseline_duration_ms INTEGER,
+    duration_delta_pct REAL,      -- (baseline - enriched) / baseline * 100
+    enriched_cost_usd REAL,
+    baseline_cost_usd REAL,
+    enriched_session_id TEXT,     -- proxy session linkage
+    baseline_session_id TEXT,     -- proxy session linkage
+    enriched_turn_count INTEGER,
+    baseline_turn_count INTEGER,
+    outcome TEXT CHECK(outcome IN ('enriched_wins', 'baseline_wins', 'tie', 'inconclusive')),
+    notes TEXT,
+    tags TEXT                     -- JSON array of tags
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_created ON experiments(created_at);
+CREATE INDEX IF NOT EXISTS idx_experiments_complexity ON experiments(task_complexity);
+CREATE INDEX IF NOT EXISTS idx_experiments_outcome ON experiments(outcome);
+
+CREATE TABLE IF NOT EXISTS session_turn_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cumulative_cost_usd REAL,
+    cache_hit_ratio REAL,        -- cache_read / (cache_read + input) for this turn
+    tools_used TEXT,             -- JSON array of tool names
+    UNIQUE(session_id, turn_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_turn_metrics_session
+    ON session_turn_metrics(session_id);

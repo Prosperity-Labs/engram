@@ -56,7 +56,16 @@ function extractProject(body: any): string | undefined {
     if (m) {
       const path = m[1].trim();
       const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
-      if (parts.length) return parts[parts.length - 1];
+      if (!parts.length) continue;
+
+      // Worktree detection: .loopwright/experiments/... or .engram-experiments/...
+      // The real project is the directory *before* the worktree marker
+      for (const marker of [".loopwright", ".engram-experiments"]) {
+        const idx = parts.indexOf(marker);
+        if (idx > 0) return parts[idx - 1];
+      }
+
+      return parts[parts.length - 1];
     }
   }
   return undefined;
@@ -75,19 +84,28 @@ function estimateTokens(text: string): number {
 
 // Session detection: group calls by project with 10-min gap
 const SESSION_GAP_MS = 10 * 60 * 1000;
-const activeSessions = new Map<string, { id: string; lastSeen: number }>();
 
-function getSessionId(project: string | undefined): string | undefined {
+interface SessionState {
+  id: string;
+  lastSeen: number;
+  turnCount: number;
+  cumulativeInputTokens: number;
+}
+
+const activeSessions = new Map<string, SessionState>();
+
+function getSessionState(project: string | undefined): { id: string; turnNumber: number; cumulativeInputTokens: number } | undefined {
   if (!project) return undefined;
   const now = Date.now();
   const existing = activeSessions.get(project);
   if (existing && now - existing.lastSeen < SESSION_GAP_MS) {
     existing.lastSeen = now;
-    return existing.id;
+    existing.turnCount++;
+    return { id: existing.id, turnNumber: existing.turnCount, cumulativeInputTokens: existing.cumulativeInputTokens };
   }
-  const id = `proxy-${crypto.randomUUID()}`;
-  activeSessions.set(project, { id, lastSeen: now });
-  return id;
+  const state: SessionState = { id: `proxy-${crypto.randomUUID()}`, lastSeen: now, turnCount: 1, cumulativeInputTokens: 0 };
+  activeSessions.set(project, state);
+  return { id: state.id, turnNumber: 1, cumulativeInputTokens: 0 };
 }
 
 let callCount = 0;
@@ -207,7 +225,8 @@ export function createHandler(opts: {
     let systemTokens = estimateTokens(systemText);
 
     // Session detection
-    const sessionId = getSessionId(project);
+    const sessionState = getSessionState(project);
+    const sessionId = sessionState?.id;
 
     // Agent type from Loopwright header
     const agentType = req.headers.get("x-loopwright-agent-type") ?? undefined;
@@ -270,13 +289,20 @@ export function createHandler(opts: {
       const cost = estimateCost(usage);
       const toolsUsed = extractToolUse(resBody.content);
 
+      // Update session turn state with actual input tokens
+      const inputToks = usage.input_tokens ?? 0;
+      if (sessionState && project) {
+        const sess = activeSessions.get(project);
+        if (sess) sess.cumulativeInputTokens += inputToks;
+      }
+
       const record: CallRecord = {
         id: callId,
         timestamp: now,
         model: resBody.model ?? model,
         system_prompt_tokens: systemTokens,
         message_count: messages.length,
-        input_tokens: usage.input_tokens ?? 0,
+        input_tokens: inputToks,
         output_tokens: usage.output_tokens ?? 0,
         cache_read_tokens: usage.cache_read_input_tokens ?? 0,
         cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
@@ -289,6 +315,8 @@ export function createHandler(opts: {
         response_bytes: resBytes.byteLength,
         enrichment_variant: enrichmentVariant,
         agent_type: agentType,
+        turn_number: sessionState?.turnNumber,
+        cumulative_input_tokens: sessionState ? activeSessions.get(project!)?.cumulativeInputTokens : undefined,
       };
 
       opts.db.save(record);
@@ -355,6 +383,8 @@ export function createHandler(opts: {
               response_bytes: totalResponseBytes,
               enrichment_variant: enrichmentVariant,
               agent_type: agentType,
+              turn_number: sessionState?.turnNumber,
+              cumulative_input_tokens: sessionState ? activeSessions.get(project!)?.cumulativeInputTokens : undefined,
             };
             opts.db.save(record);
             printSummary(record);
@@ -370,6 +400,12 @@ export function createHandler(opts: {
             cache_read_input_tokens: sse.cache_read_input_tokens,
             cache_creation_input_tokens: sse.cache_creation_input_tokens,
           });
+
+          // Update session turn state with actual input tokens
+          if (sessionState && project) {
+            const sess = activeSessions.get(project);
+            if (sess) sess.cumulativeInputTokens += sse.input_tokens;
+          }
 
           const record: CallRecord = {
             id: callId,
@@ -390,6 +426,8 @@ export function createHandler(opts: {
             response_bytes: totalResponseBytes,
             enrichment_variant: enrichmentVariant,
             agent_type: agentType,
+            turn_number: sessionState?.turnNumber,
+            cumulative_input_tokens: sessionState ? activeSessions.get(project!)?.cumulativeInputTokens : undefined,
           };
 
           opts.db.save(record);
